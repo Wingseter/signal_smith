@@ -26,3 +26,4 @@ class User(Base):
     # Relationships
     portfolios = relationship("Portfolio", back_populates="user", cascade="all, delete-orphan")
     transactions = relationship("Transaction", back_populates="user", cascade="all, delete-orphan")
+    watchlist = relationship("Watchlist", back_populates="user", cascade="all, delete-orphan")

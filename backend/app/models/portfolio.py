@@ -52,3 +52,23 @@ class PortfolioHolding(Base):
 
     # Relationships
     portfolio = relationship("Portfolio", back_populates="holdings")
+
+
+class Watchlist(Base):
+    """User watchlist for tracking stocks."""
+
+    __tablename__ = "watchlists"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    alert_price_above: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2), nullable=True)
+    alert_price_below: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    # Relationships
+    user = relationship("User", back_populates="watchlist")

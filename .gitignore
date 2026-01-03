@@ -64,3 +64,31 @@ celerybeat.pid
 *.pem
 *.key
 credentials.json
+
+# Alembic
+alembic/versions/*.pyc
+
+# Redis dump
+dump.rdb
+
+# Coverage
+.coverage.*
+coverage.xml
+
+# mypy
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Backend
+backend/.env
+backend/logs/
+
+# Frontend
+frontend/.env
+frontend/.env.local
+frontend/coverage/
+
+# Claude Code
+.claude/
