@@ -4,10 +4,13 @@ import clsx from 'clsx';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: '📊' },
+  { path: '/analysis', label: 'Analysis', icon: '🔍' },
+  { path: '/signals', label: 'Signals', icon: '📡' },
   { path: '/stocks', label: 'Stocks', icon: '📈' },
   { path: '/portfolio', label: 'Portfolio', icon: '💼' },
   { path: '/trading', label: 'Trading', icon: '💹' },
   { path: '/agents', label: 'AI Agents', icon: '🤖' },
+  { path: '/settings/notifications', label: 'Alerts', icon: '🔔' },
 ];
 
 export default function Layout() {

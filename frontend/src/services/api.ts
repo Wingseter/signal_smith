@@ -69,12 +69,42 @@ export const stocksApi = {
     const response = await api.get(`/stocks/${symbol}`);
     return response.data;
   },
+  getRealtimePrice: async (symbol: string) => {
+    const response = await api.get(`/stocks/price/${symbol}`);
+    return response.data;
+  },
+  getMultiplePrices: async (symbols: string[]) => {
+    const response = await api.post('/stocks/prices', symbols);
+    return response.data;
+  },
+  getPriceHistory: async (symbol: string, period: string = 'daily', count: number = 100) => {
+    const response = await api.get(`/stocks/${symbol}/history`, {
+      params: { period, count },
+    });
+    return response.data;
+  },
   getPrices: async (symbol: string, params?: { start_date?: string; end_date?: string; limit?: number }) => {
     const response = await api.get(`/stocks/${symbol}/prices`, { params });
     return response.data;
   },
   getAnalysis: async (symbol: string, analysisType?: string) => {
     const response = await api.get(`/stocks/${symbol}/analysis`, { params: { analysis_type: analysisType } });
+    return response.data;
+  },
+  getWatchlist: async () => {
+    const response = await api.get('/stocks/watchlist/me');
+    return response.data;
+  },
+  addToWatchlist: async (symbol: string) => {
+    const response = await api.post(`/stocks/watchlist/${symbol}`);
+    return response.data;
+  },
+  removeFromWatchlist: async (symbol: string) => {
+    const response = await api.delete(`/stocks/watchlist/${symbol}`);
+    return response.data;
+  },
+  collectPriceData: async (symbol: string) => {
+    const response = await api.post(`/stocks/${symbol}/collect`);
     return response.data;
   },
 };
@@ -106,15 +136,16 @@ export const portfolioApi = {
 export const tradingApi = {
   createOrder: async (data: {
     symbol: string;
-    transaction_type: 'buy' | 'sell';
+    side: 'buy' | 'sell';
     quantity: number;
     price: number;
+    order_type?: 'limit' | 'market';
     note?: string;
   }) => {
     const response = await api.post('/trading/orders', data);
     return response.data;
   },
-  listOrders: async (params?: { status?: string; symbol?: string; skip?: number; limit?: number }) => {
+  listOrders: async (params?: { status?: string; symbol?: string; limit?: number }) => {
     const response = await api.get('/trading/orders', { params });
     return response.data;
   },
@@ -126,27 +157,184 @@ export const tradingApi = {
     const response = await api.post(`/trading/orders/${id}/cancel`);
     return response.data;
   },
-  getSignals: async (params?: { symbol?: string; signal_type?: string; limit?: number }) => {
+  getAccountBalance: async () => {
+    const response = await api.get('/trading/account/balance');
+    return response.data;
+  },
+  getHoldings: async () => {
+    const response = await api.get('/trading/account/holdings');
+    return response.data;
+  },
+  getSignals: async (params?: { symbol?: string; signal_type?: string; executed?: boolean; limit?: number }) => {
     const response = await api.get('/trading/signals', { params });
+    return response.data;
+  },
+  getPendingSignals: async (limit: number = 20) => {
+    const response = await api.get('/trading/signals/pending', { params: { limit } });
+    return response.data;
+  },
+  executeSignal: async (signalId: number, quantity: number) => {
+    const response = await api.post(`/trading/signals/${signalId}/execute`, { quantity });
+    return response.data;
+  },
+  getTradingSettings: async () => {
+    const response = await api.get('/trading/settings');
     return response.data;
   },
 };
 
 // Analysis API
 export const analysisApi = {
-  request: async (symbol: string, analysisTypes?: string[]) => {
+  runFullAnalysis: async (symbol: string, options?: {
+    analysis_types?: string[];
+    include_price_data?: boolean;
+    save_to_db?: boolean;
+  }) => {
+    const response = await api.post('/analysis/run', {
+      symbol,
+      ...options,
+    });
+    return response.data;
+  },
+  runQuickAnalysis: async (symbol: string) => {
+    const response = await api.post('/analysis/quick', { symbol });
+    return response.data;
+  },
+  requestBackgroundAnalysis: async (symbol: string, analysisTypes?: string[]) => {
     const response = await api.post('/analysis/request', {
       symbol,
       analysis_types: analysisTypes,
     });
     return response.data;
   },
+  getTaskStatus: async (taskId: string) => {
+    const response = await api.get(`/analysis/task/${taskId}`);
+    return response.data;
+  },
   getConsolidated: async (symbol: string) => {
     const response = await api.get(`/analysis/consolidated/${symbol}`);
     return response.data;
   },
+  getHistory: async (symbol: string, analysisType?: string, limit?: number) => {
+    const response = await api.get(`/analysis/history/${symbol}`, {
+      params: { analysis_type: analysisType, limit },
+    });
+    return response.data;
+  },
+  getMarketSentiment: async (market: string = 'KOSPI') => {
+    const response = await api.get('/analysis/market/sentiment', { params: { market } });
+    return response.data;
+  },
   getAgentsStatus: async () => {
     const response = await api.get('/analysis/agents/status');
+    return response.data;
+  },
+  getCoordinatorStatus: async () => {
+    const response = await api.get('/analysis/agents/coordinator');
+    return response.data;
+  },
+  getLatestSignals: async (limit: number = 10, signalType?: string) => {
+    const response = await api.get('/analysis/signals/latest', {
+      params: { limit, signal_type: signalType },
+    });
+    return response.data;
+  },
+  getSignalsStats: async () => {
+    const response = await api.get('/analysis/signals/stats');
+    return response.data;
+  },
+};
+
+// WebSocket connection helper
+export const createWebSocket = (endpoint: string): WebSocket => {
+  const wsUrl = API_BASE_URL.replace('http', 'ws');
+  return new WebSocket(`${wsUrl}/ws/${endpoint}`);
+};
+
+// Market WebSocket
+export const marketWebSocket = {
+  connect: () => createWebSocket('market'),
+  subscribe: (ws: WebSocket, symbols: string[]) => {
+    ws.send(JSON.stringify({ action: 'subscribe', symbols }));
+  },
+  unsubscribe: (ws: WebSocket, symbols: string[]) => {
+    ws.send(JSON.stringify({ action: 'unsubscribe', symbols }));
+  },
+  getPrice: (ws: WebSocket, symbol: string) => {
+    ws.send(JSON.stringify({ action: 'get_price', symbol }));
+  },
+  ping: (ws: WebSocket) => {
+    ws.send(JSON.stringify({ action: 'ping' }));
+  },
+};
+
+// Analysis WebSocket
+export const analysisWebSocket = {
+  connect: () => createWebSocket('analysis'),
+  subscribeSymbol: (ws: WebSocket, symbol: string) => {
+    ws.send(JSON.stringify({ action: 'subscribe_symbol', symbol }));
+  },
+  ping: (ws: WebSocket) => {
+    ws.send(JSON.stringify({ action: 'ping' }));
+  },
+};
+
+// Trading WebSocket
+export const tradingWebSocket = {
+  connect: () => createWebSocket('trading'),
+  ping: (ws: WebSocket) => {
+    ws.send(JSON.stringify({ type: 'ping' }));
+  },
+};
+
+// Notifications API
+export const notificationsApi = {
+  getStatus: async () => {
+    const response = await api.get('/notifications/status');
+    return response.data;
+  },
+  getChannels: async () => {
+    const response = await api.get('/notifications/channels');
+    return response.data;
+  },
+  getSettings: async () => {
+    const response = await api.get('/notifications/settings');
+    return response.data;
+  },
+  updateSettings: async (settings: Record<string, unknown>) => {
+    const response = await api.put('/notifications/settings', settings);
+    return response.data;
+  },
+  sendTest: async (channel: string, message?: string) => {
+    const response = await api.post('/notifications/test', { channel, message });
+    return response.data;
+  },
+  sendNotification: async (data: {
+    type: string;
+    title: string;
+    message: string;
+    priority?: string;
+    data?: Record<string, unknown>;
+    channels?: string[];
+  }) => {
+    const response = await api.post('/notifications/send', data);
+    return response.data;
+  },
+  getAlerts: async () => {
+    const response = await api.get('/notifications/alerts');
+    return response.data;
+  },
+  createAlert: async (alert: {
+    symbol: string;
+    price_above?: number | null;
+    price_below?: number | null;
+    note?: string | null;
+  }) => {
+    const response = await api.post('/notifications/alerts', alert);
+    return response.data;
+  },
+  deleteAlert: async (alertId: number) => {
+    const response = await api.delete(`/notifications/alerts/${alertId}`);
     return response.data;
   },
 };

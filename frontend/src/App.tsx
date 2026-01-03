@@ -7,7 +7,10 @@ import StockList from './components/Charts/StockList';
 import StockDetail from './components/Charts/StockDetail';
 import Portfolio from './components/Portfolio/Portfolio';
 import Trading from './components/Trading/Trading';
+import TradingSignals from './components/Trading/TradingSignals';
 import AgentMonitor from './components/AgentMonitor/AgentMonitor';
+import AnalysisPanel from './components/Analysis/AnalysisPanel';
+import NotificationSettings from './components/Settings/NotificationSettings';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -31,7 +34,10 @@ function App() {
         <Route path="stocks/:symbol" element={<StockDetail />} />
         <Route path="portfolio" element={<Portfolio />} />
         <Route path="trading" element={<Trading />} />
+        <Route path="signals" element={<TradingSignals />} />
         <Route path="agents" element={<AgentMonitor />} />
+        <Route path="analysis" element={<AnalysisPanel />} />
+        <Route path="settings/notifications" element={<NotificationSettings />} />
       </Route>
     </Routes>
   );
