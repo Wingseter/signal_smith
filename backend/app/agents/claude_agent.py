@@ -7,7 +7,9 @@ Responsibilities:
 - Assess long-term investment potential
 """
 
-from typing import Optional
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+import json
 
 from app.config import settings
 
@@ -27,10 +29,49 @@ class ClaudeFundamentalAgent:
             self._client = AsyncAnthropic(api_key=self.api_key)
         return self._client
 
+    def _format_financial_data(self, data: dict) -> str:
+        """Format financial data for the prompt."""
+        if not data:
+            return "재무 데이터 없음"
+
+        lines = []
+
+        # Income statement
+        if "income_statement" in data:
+            inc = data["income_statement"]
+            lines.append("손익계산서:")
+            lines.append(f"  - 매출액: {inc.get('revenue', 'N/A')}")
+            lines.append(f"  - 매출원가: {inc.get('cost_of_sales', 'N/A')}")
+            lines.append(f"  - 영업이익: {inc.get('operating_profit', 'N/A')}")
+            lines.append(f"  - 당기순이익: {inc.get('net_income', 'N/A')}")
+
+        # Balance sheet
+        if "balance_sheet" in data:
+            bs = data["balance_sheet"]
+            lines.append("재무상태표:")
+            lines.append(f"  - 총자산: {bs.get('total_assets', 'N/A')}")
+            lines.append(f"  - 총부채: {bs.get('total_liabilities', 'N/A')}")
+            lines.append(f"  - 자기자본: {bs.get('equity', 'N/A')}")
+            lines.append(f"  - 부채비율: {bs.get('debt_ratio', 'N/A')}%")
+
+        # Ratios
+        if "ratios" in data:
+            ratios = data["ratios"]
+            lines.append("주요 비율:")
+            lines.append(f"  - PER: {ratios.get('per', 'N/A')}")
+            lines.append(f"  - PBR: {ratios.get('pbr', 'N/A')}")
+            lines.append(f"  - ROE: {ratios.get('roe', 'N/A')}%")
+            lines.append(f"  - ROA: {ratios.get('roa', 'N/A')}%")
+            lines.append(f"  - 영업이익률: {ratios.get('operating_margin', 'N/A')}%")
+            lines.append(f"  - 순이익률: {ratios.get('net_margin', 'N/A')}%")
+
+        return "\n".join(lines)
+
     async def analyze(
         self,
         symbol: str,
         financial_data: Optional[dict] = None,
+        company_info: Optional[dict] = None,
     ) -> dict:
         """
         Perform fundamental analysis on a stock.
@@ -38,6 +79,7 @@ class ClaudeFundamentalAgent:
         Args:
             symbol: Stock symbol to analyze
             financial_data: Optional financial statement data
+            company_info: Optional company information
 
         Returns:
             Fundamental analysis result
@@ -56,10 +98,29 @@ class ClaudeFundamentalAgent:
             }
 
         try:
-            prompt = f"""You are a fundamental analyst specializing in Korean stocks.
-            Analyze the company with stock symbol {symbol}.
+            # Format financial data
+            financial_context = self._format_financial_data(financial_data) if financial_data else ""
 
-            Perform a thorough fundamental analysis considering:
+            # Format company info
+            company_context = ""
+            if company_info:
+                company_context = f"""
+                회사 정보:
+                - 회사명: {company_info.get('name', 'N/A')}
+                - 업종: {company_info.get('sector', 'N/A')}
+                - 산업: {company_info.get('industry', 'N/A')}
+                - 시가총액: {company_info.get('market_cap', 'N/A')}
+                - 상장일: {company_info.get('listing_date', 'N/A')}
+                """
+
+            prompt = f"""You are a professional fundamental analyst specializing in Korean stocks.
+            Perform a thorough fundamental analysis for stock symbol {symbol}.
+
+            {company_context}
+
+            {financial_context}
+
+            Analyze the following aspects thoroughly:
 
             1. **Financial Health**
                - Revenue growth trends
@@ -147,6 +208,7 @@ class ClaudeFundamentalAgent:
                 "investment_thesis": result.get("investment_thesis"),
                 "confidence": result.get("confidence", 50),
                 "fair_value_estimate": result.get("fair_value_estimate"),
+                "analyzed_at": datetime.utcnow().isoformat(),
             }
 
         except Exception as e:
@@ -158,6 +220,7 @@ class ClaudeFundamentalAgent:
                 "summary": f"Analysis failed: {str(e)}",
                 "recommendation": None,
                 "error": str(e),
+                "analyzed_at": datetime.utcnow().isoformat(),
             }
 
     async def analyze_financial_report(self, report_text: str, symbol: str) -> dict:
@@ -219,6 +282,297 @@ class ClaudeFundamentalAgent:
                 pass
 
             return {"analysis": response_text}
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def compare_peers(
+        self,
+        symbol: str,
+        peers: List[dict],
+        financial_data: Optional[dict] = None,
+    ) -> dict:
+        """
+        Compare a stock with its peers.
+
+        Args:
+            symbol: Target stock symbol
+            peers: List of peer company data
+            financial_data: Target company's financial data
+
+        Returns:
+            Peer comparison analysis
+        """
+        client = self._get_client()
+
+        if client is None:
+            return {"error": "API key not set"}
+
+        try:
+            peers_str = "\n".join([
+                f"- {p.get('symbol', 'N/A')} ({p.get('name', 'N/A')}): "
+                f"PER {p.get('per', 'N/A')}, PBR {p.get('pbr', 'N/A')}, "
+                f"ROE {p.get('roe', 'N/A')}%"
+                for p in peers
+            ])
+
+            target_str = self._format_financial_data(financial_data) if financial_data else "데이터 없음"
+
+            prompt = f"""
+            {symbol} 종목을 동종 업체와 비교 분석하세요:
+
+            대상 종목 ({symbol}):
+            {target_str}
+
+            동종 업체:
+            {peers_str}
+
+            다음 JSON 형식으로 비교 분석을 제공하세요:
+            {{
+                "relative_valuation": {{
+                    "vs_peers": "<premium/inline/discount>",
+                    "valuation_gap_pct": <시장 대비 할인/프리미엄 %>
+                }},
+                "competitive_position": {{
+                    "market_share_rank": <순위 또는 "N/A">,
+                    "competitive_advantages": ["<강점1>", "<강점2>"],
+                    "competitive_weaknesses": ["<약점1>", "<약점2>"]
+                }},
+                "financial_comparison": {{
+                    "profitability_rank": <순위>,
+                    "growth_rank": <순위>,
+                    "stability_rank": <순위>
+                }},
+                "peer_vs_analysis": [
+                    {{
+                        "peer_symbol": "<피어 종목코드>",
+                        "comparison": "<비교 분석>",
+                        "preference": "<target/peer/neutral>"
+                    }}
+                ],
+                "summary": "<동종 업체 대비 종합 평가 (한글)>",
+                "recommendation": "<업종 내 추천 순위 및 이유>"
+            }}
+            """
+
+            message = await client.messages.create(
+                model=self.model_name,
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = message.content[0].text
+
+            try:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                if start >= 0 and end > start:
+                    result = json.loads(response_text[start:end])
+                    result["symbol"] = symbol
+                    result["compared_at"] = datetime.utcnow().isoformat()
+                    return result
+            except json.JSONDecodeError:
+                pass
+
+            return {
+                "symbol": symbol,
+                "analysis": response_text,
+                "compared_at": datetime.utcnow().isoformat(),
+            }
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def evaluate_dividend(
+        self,
+        symbol: str,
+        dividend_history: List[dict],
+        financial_data: Optional[dict] = None,
+    ) -> dict:
+        """
+        Evaluate dividend policy and sustainability.
+
+        Args:
+            symbol: Stock symbol
+            dividend_history: Historical dividend data
+            financial_data: Financial statement data
+
+        Returns:
+            Dividend analysis
+        """
+        client = self._get_client()
+
+        if client is None:
+            return {"error": "API key not set"}
+
+        try:
+            dividend_str = "\n".join([
+                f"- {d.get('year', 'N/A')}: {d.get('dps', 0):,}원 (배당률 {d.get('yield', 0):.2f}%)"
+                for d in dividend_history
+            ]) if dividend_history else "배당 데이터 없음"
+
+            financial_str = self._format_financial_data(financial_data) if financial_data else ""
+
+            prompt = f"""
+            {symbol} 종목의 배당 정책을 분석하세요:
+
+            배당 이력:
+            {dividend_str}
+
+            {financial_str}
+
+            다음 JSON 형식으로 배당 분석을 제공하세요:
+            {{
+                "dividend_score": <0-100>,
+                "current_yield": <현재 배당률 %>,
+                "payout_ratio": <배당성향 %>,
+                "sustainability": {{
+                    "score": <0-100>,
+                    "assessment": "<안정적/주의/위험>",
+                    "concerns": ["<우려사항1>"]
+                }},
+                "growth_potential": {{
+                    "trend": "<increasing/stable/decreasing>",
+                    "expected_growth": "<예상 성장률>"
+                }},
+                "dividend_history_analysis": "<배당 이력 분석>",
+                "vs_sector": "<업종 대비 배당 수준>",
+                "recommendation": {{
+                    "action": "<buy for income/hold/avoid>",
+                    "target_investor": "<적합한 투자자 유형>",
+                    "rationale": "<근거>"
+                }},
+                "summary": "<배당 투자 관점 요약 (한글)>"
+            }}
+            """
+
+            message = await client.messages.create(
+                model=self.model_name,
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = message.content[0].text
+
+            try:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                if start >= 0 and end > start:
+                    result = json.loads(response_text[start:end])
+                    result["symbol"] = symbol
+                    result["analyzed_at"] = datetime.utcnow().isoformat()
+                    return result
+            except json.JSONDecodeError:
+                pass
+
+            return {
+                "symbol": symbol,
+                "analysis": response_text,
+                "analyzed_at": datetime.utcnow().isoformat(),
+            }
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    async def assess_esg(
+        self,
+        symbol: str,
+        esg_data: Optional[dict] = None,
+        company_info: Optional[dict] = None,
+    ) -> dict:
+        """
+        ESG (Environmental, Social, Governance) assessment.
+
+        Args:
+            symbol: Stock symbol
+            esg_data: ESG-related data if available
+            company_info: Company information
+
+        Returns:
+            ESG assessment
+        """
+        client = self._get_client()
+
+        if client is None:
+            return {"error": "API key not set"}
+
+        try:
+            context = ""
+            if company_info:
+                context = f"""
+                회사 정보:
+                - 회사명: {company_info.get('name', 'N/A')}
+                - 업종: {company_info.get('sector', 'N/A')}
+                - 산업: {company_info.get('industry', 'N/A')}
+                """
+
+            esg_context = ""
+            if esg_data:
+                esg_context = f"""
+                ESG 데이터:
+                - 환경 점수: {esg_data.get('environmental_score', 'N/A')}
+                - 사회 점수: {esg_data.get('social_score', 'N/A')}
+                - 지배구조 점수: {esg_data.get('governance_score', 'N/A')}
+                """
+
+            prompt = f"""
+            {symbol} 종목의 ESG 평가를 수행하세요:
+
+            {context}
+            {esg_context}
+
+            다음 JSON 형식으로 ESG 분석을 제공하세요:
+            {{
+                "overall_esg_score": <0-100>,
+                "environmental": {{
+                    "score": <0-100>,
+                    "key_factors": ["<요인1>", "<요인2>"],
+                    "risks": ["<리스크1>"],
+                    "initiatives": ["<이니셔티브1>"]
+                }},
+                "social": {{
+                    "score": <0-100>,
+                    "key_factors": ["<요인1>"],
+                    "labor_practices": "<평가>",
+                    "community_impact": "<평가>"
+                }},
+                "governance": {{
+                    "score": <0-100>,
+                    "board_quality": "<평가>",
+                    "transparency": "<평가>",
+                    "shareholder_rights": "<평가>"
+                }},
+                "esg_trend": "<improving/stable/declining>",
+                "materiality_issues": ["<중요 이슈1>", "<중요 이슈2>"],
+                "investment_implication": "<ESG 관점 투자 시사점>",
+                "summary": "<ESG 종합 평가 (한글)>"
+            }}
+            """
+
+            message = await client.messages.create(
+                model=self.model_name,
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = message.content[0].text
+
+            try:
+                start = response_text.find("{")
+                end = response_text.rfind("}") + 1
+                if start >= 0 and end > start:
+                    result = json.loads(response_text[start:end])
+                    result["symbol"] = symbol
+                    result["assessed_at"] = datetime.utcnow().isoformat()
+                    return result
+            except json.JSONDecodeError:
+                pass
+
+            return {
+                "symbol": symbol,
+                "analysis": response_text,
+                "assessed_at": datetime.utcnow().isoformat(),
+            }
 
         except Exception as e:
             return {"error": str(e)}

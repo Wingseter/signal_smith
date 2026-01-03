@@ -1,8 +1,8 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Dict, Any
 
-from sqlalchemy import DateTime, Integer, Numeric, String, Text, func
+from sqlalchemy import DateTime, Integer, Numeric, String, Text, func, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -60,7 +60,8 @@ class StockAnalysis(Base):
     summary: Mapped[str] = mapped_column(Text)
     score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)  # -100 to 100
     recommendation: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # buy, hold, sell
-    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON string
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON string (legacy)
+    raw_data: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)  # Full analysis data
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
