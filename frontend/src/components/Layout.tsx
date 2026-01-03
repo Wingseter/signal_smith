@@ -10,6 +10,7 @@ const navItems = [
   { path: '/portfolio', label: 'Portfolio', icon: '💼' },
   { path: '/trading', label: 'Trading', icon: '💹' },
   { path: '/agents', label: 'AI Agents', icon: '🤖' },
+  { path: '/settings/notifications', label: 'Alerts', icon: '🔔' },
 ];
 
 export default function Layout() {
