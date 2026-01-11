@@ -13,6 +13,7 @@ const navItems = [
   { path: '/performance', label: 'Performance', icon: '📉' },
   { path: '/optimizer', label: 'Optimizer', icon: '⚖️' },
   { path: '/sectors', label: 'Sectors', icon: '🏭' },
+  { path: '/reports', label: 'Reports', icon: '📄' },
   { path: '/agents', label: 'AI Agents', icon: '🤖' },
   { path: '/settings/notifications', label: 'Alerts', icon: '🔔' },
 ];
