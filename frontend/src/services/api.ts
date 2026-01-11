@@ -53,8 +53,9 @@ export const authApi = {
     });
     return response.data;
   },
-  getMe: async () => {
-    const response = await api.get('/auth/me');
+  getMe: async (token?: string) => {
+    const config = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
+    const response = await api.get('/auth/me', config);
     return response.data;
   },
 };
@@ -335,6 +336,229 @@ export const notificationsApi = {
   },
   deleteAlert: async (alertId: number) => {
     const response = await api.delete(`/notifications/alerts/${alertId}`);
+    return response.data;
+  },
+};
+
+// Backtesting API
+export const backtestApi = {
+  getStrategies: async () => {
+    const response = await api.get('/backtest/strategies');
+    return response.data;
+  },
+  run: async (data: {
+    strategy: string;
+    symbols: string[];
+    start_date: string;
+    end_date: string;
+    initial_capital?: number;
+    parameters?: Record<string, unknown>;
+    config?: Record<string, unknown>;
+    save_result?: boolean;
+  }) => {
+    const response = await api.post('/backtest/run', data);
+    return response.data;
+  },
+  compare: async (params: {
+    symbols: string[];
+    start_date: string;
+    end_date: string;
+    strategies?: string[];
+    initial_capital?: number;
+  }) => {
+    const response = await api.post('/backtest/compare', null, { params });
+    return response.data;
+  },
+  getHistory: async (params?: {
+    limit?: number;
+    offset?: number;
+    strategy?: string;
+    favorites_only?: boolean;
+  }) => {
+    const response = await api.get('/backtest/history', { params });
+    return response.data;
+  },
+  getDetail: async (id: number) => {
+    const response = await api.get(`/backtest/history/${id}`);
+    return response.data;
+  },
+  updateBacktest: async (id: number, data: {
+    is_favorite?: boolean;
+    notes?: string;
+    tags?: string[];
+  }) => {
+    const response = await api.patch(`/backtest/history/${id}`, data);
+    return response.data;
+  },
+  deleteBacktest: async (id: number) => {
+    const response = await api.delete(`/backtest/history/${id}`);
+    return response.data;
+  },
+  getComparisons: async (limit?: number) => {
+    const response = await api.get('/backtest/comparisons', { params: { limit } });
+    return response.data;
+  },
+};
+
+// Performance Analytics API
+export const performanceApi = {
+  getDashboard: async (period: string = '3m') => {
+    const response = await api.get('/performance/dashboard', { params: { period } });
+    return response.data;
+  },
+  getSignalPerformance: async (params?: {
+    symbol?: string;
+    signal_type?: string;
+    executed_only?: boolean;
+    limit?: number;
+  }) => {
+    const response = await api.get('/performance/signals', { params });
+    return response.data;
+  },
+  getRiskMetrics: async (period: string = '3m') => {
+    const response = await api.get('/performance/risk-metrics', { params: { period } });
+    return response.data;
+  },
+  getBySymbol: async (period: string = '3m') => {
+    const response = await api.get('/performance/by-symbol', { params: { period } });
+    return response.data;
+  },
+  getDrawdown: async (period: string = '3m') => {
+    const response = await api.get('/performance/drawdown', { params: { period } });
+    return response.data;
+  },
+  getMonthlyReturns: async (year?: number) => {
+    const response = await api.get('/performance/monthly-returns', { params: { year } });
+    return response.data;
+  },
+};
+
+// Portfolio Optimizer API
+export const optimizerApi = {
+  getMethods: async () => {
+    const response = await api.get('/optimizer/methods');
+    return response.data;
+  },
+  optimize: async (data: {
+    symbols: string[];
+    total_capital: number;
+    method?: string;
+    risk_level?: string;
+    max_position_size?: number;
+    max_sector_exposure?: number;
+  }) => {
+    const response = await api.post('/optimizer/optimize', data);
+    return response.data;
+  },
+  calculatePositionSize: async (data: {
+    symbol: string;
+    entry_price: number;
+    stop_loss_price: number;
+    total_capital: number;
+    current_portfolio_value?: number;
+    win_rate?: number;
+    avg_win_loss_ratio?: number;
+    max_risk_per_trade?: number;
+  }) => {
+    const response = await api.post('/optimizer/position-size', data);
+    return response.data;
+  },
+  getDiversification: async (portfolioId?: number) => {
+    const response = await api.get('/optimizer/diversification', {
+      params: portfolioId ? { portfolio_id: portfolioId } : {},
+    });
+    return response.data;
+  },
+  getRebalanceSuggestions: async (portfolioId?: number, method?: string) => {
+    const response = await api.post('/optimizer/rebalance', null, {
+      params: { portfolio_id: portfolioId, target_method: method },
+    });
+    return response.data;
+  },
+};
+
+// Sector Analysis API
+export const sectorsApi = {
+  list: async () => {
+    const response = await api.get('/sectors/list');
+    return response.data;
+  },
+  getPerformance: async () => {
+    const response = await api.get('/sectors/performance');
+    return response.data;
+  },
+  getSectorDetail: async (sectorId: string) => {
+    const response = await api.get(`/sectors/sector/${sectorId}`);
+    return response.data;
+  },
+  getThemes: async (hotOnly: boolean = false) => {
+    const response = await api.get('/sectors/themes', { params: { hot_only: hotOnly } });
+    return response.data;
+  },
+  getThemeDetail: async (themeId: string) => {
+    const response = await api.get(`/sectors/theme/${themeId}`);
+    return response.data;
+  },
+  getRotationSignal: async () => {
+    const response = await api.get('/sectors/rotation');
+    return response.data;
+  },
+  getRecommended: async (cyclePhase?: string) => {
+    const response = await api.get('/sectors/recommended', {
+      params: cyclePhase ? { cycle_phase: cyclePhase } : {},
+    });
+    return response.data;
+  },
+  getCorrelation: async (periodDays: number = 60) => {
+    const response = await api.get('/sectors/correlation', { params: { period_days: periodDays } });
+    return response.data;
+  },
+  search: async (keyword: string) => {
+    const response = await api.get('/sectors/search', { params: { keyword } });
+    return response.data;
+  },
+  getHeatmap: async () => {
+    const response = await api.get('/sectors/heatmap');
+    return response.data;
+  },
+};
+
+// Reports API
+export const reportsApi = {
+  getTypes: async () => {
+    const response = await api.get('/reports/types');
+    return response.data;
+  },
+  generateStockReport: async (symbol: string, includeAiInsights: boolean = true) => {
+    const response = await api.post(
+      '/reports/stock',
+      { symbol, include_ai_insights: includeAiInsights },
+      { responseType: 'blob' }
+    );
+    return response.data;
+  },
+  generatePortfolioReport: async (portfolioId?: number, includeRiskMetrics: boolean = true) => {
+    const response = await api.post(
+      '/reports/portfolio',
+      { portfolio_id: portfolioId, include_risk_metrics: includeRiskMetrics },
+      { responseType: 'blob' }
+    );
+    return response.data;
+  },
+  generateTradingReport: async (periodDays: number = 30) => {
+    const response = await api.post(
+      '/reports/trading',
+      { period_days: periodDays },
+      { responseType: 'blob' }
+    );
+    return response.data;
+  },
+  generateMarketReport: async (includeSectors: boolean = true) => {
+    const response = await api.post(
+      '/reports/market',
+      { include_sectors: includeSectors },
+      { responseType: 'blob' }
+    );
     return response.data;
   },
 };

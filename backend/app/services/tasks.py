@@ -12,7 +12,8 @@ from sqlalchemy import select
 from app.core.celery_app import celery_app
 from app.core.database import get_sync_db
 from app.config import settings
-from app.models.stock import Stock, StockPrice, StockAnalysis, TradingSignal
+from app.models.stock import Stock, StockPrice, StockAnalysis
+from app.models.transaction import TradingSignal
 
 logger = logging.getLogger(__name__)
 
