@@ -12,6 +12,7 @@ const navItems = [
   { path: '/backtest', label: 'Backtest', icon: '⏱️' },
   { path: '/performance', label: 'Performance', icon: '📉' },
   { path: '/optimizer', label: 'Optimizer', icon: '⚖️' },
+  { path: '/sectors', label: 'Sectors', icon: '🏭' },
   { path: '/agents', label: 'AI Agents', icon: '🤖' },
   { path: '/settings/notifications', label: 'Alerts', icon: '🔔' },
 ];
