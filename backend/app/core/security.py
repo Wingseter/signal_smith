@@ -93,10 +93,10 @@ def decode_token(token: str) -> Optional[TokenData]:
 def create_tokens(user_id: int, email: str) -> Token:
     """Create access and refresh tokens."""
     access_token = create_access_token(
-        data={"sub": user_id, "email": email}
+        data={"sub": str(user_id), "email": email}
     )
     refresh_token = create_refresh_token(
-        data={"sub": user_id, "email": email}
+        data={"sub": str(user_id), "email": email}
     )
     return Token(
         access_token=access_token,
