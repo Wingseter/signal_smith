@@ -21,13 +21,15 @@ export default function LoginPage() {
     try {
       if (isLogin) {
         const tokens = await authApi.login(email, password);
-        const user = await authApi.getMe();
+        // Pass token directly to getMe() to avoid timing issues with store
+        const user = await authApi.getMe(tokens.access_token);
         setAuth(user, tokens.access_token, tokens.refresh_token);
         navigate('/');
       } else {
         await authApi.register(email, password, fullName);
         const tokens = await authApi.login(email, password);
-        const user = await authApi.getMe();
+        // Pass token directly to getMe() to avoid timing issues with store
+        const user = await authApi.getMe(tokens.access_token);
         setAuth(user, tokens.access_token, tokens.refresh_token);
         navigate('/');
       }

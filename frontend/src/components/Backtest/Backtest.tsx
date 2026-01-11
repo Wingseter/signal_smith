@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { backtestApi } from '../../services/api';
 import {
   LineChart,
@@ -13,6 +13,7 @@ import {
   AreaChart,
   Area,
 } from 'recharts';
+import clsx from 'clsx';
 
 interface StrategyParam {
   type: string;
@@ -42,6 +43,7 @@ interface Trade {
 
 interface BacktestResult {
   success: boolean;
+  id?: number;
   strategy_name: string;
   start_date: string;
   end_date: string;
@@ -60,6 +62,26 @@ interface BacktestResult {
   errors: string[];
 }
 
+interface BacktestHistoryItem {
+  id: number;
+  strategy_name: string;
+  strategy_display_name: string | null;
+  symbols: string[];
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  final_value: number;
+  total_return_pct: number;
+  total_trades: number;
+  sharpe_ratio: number | null;
+  max_drawdown: number | null;
+  win_rate: number | null;
+  is_favorite: boolean;
+  tags: string[] | null;
+  notes: string | null;
+  created_at: string;
+}
+
 const KOREAN_STOCKS = [
   { symbol: '005930', name: '삼성전자' },
   { symbol: '000660', name: 'SK하이닉스' },
@@ -74,6 +96,8 @@ const KOREAN_STOCKS = [
 ];
 
 export default function Backtest() {
+  const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState<'run' | 'history'>('run');
   const [selectedStrategy, setSelectedStrategy] = useState<string>('');
   const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
   const [startDate, setStartDate] = useState<string>(() => {
@@ -87,6 +111,10 @@ export default function Backtest() {
   const [initialCapital, setInitialCapital] = useState<number>(10000000);
   const [params, setParams] = useState<Record<string, number>>({});
   const [result, setResult] = useState<BacktestResult | null>(null);
+  const [historyFilter, setHistoryFilter] = useState<{ strategy?: string; favorites_only: boolean }>({
+    favorites_only: false,
+  });
+  const [selectedHistoryId, setSelectedHistoryId] = useState<number | null>(null);
 
   // Fetch strategies
   const { data: strategiesData } = useQuery({
@@ -94,7 +122,22 @@ export default function Backtest() {
     queryFn: backtestApi.getStrategies,
   });
 
+  // Fetch history
+  const { data: historyData, isLoading: historyLoading } = useQuery({
+    queryKey: ['backtest', 'history', historyFilter],
+    queryFn: () => backtestApi.getHistory({ limit: 50, ...historyFilter }),
+    enabled: activeTab === 'history',
+  });
+
+  // Fetch selected history detail
+  const { data: historyDetail } = useQuery({
+    queryKey: ['backtest', 'detail', selectedHistoryId],
+    queryFn: () => backtestApi.getDetail(selectedHistoryId!),
+    enabled: selectedHistoryId !== null,
+  });
+
   const strategies: Strategy[] = strategiesData?.strategies || [];
+  const history: BacktestHistoryItem[] = historyData?.history || [];
 
   const currentStrategy = useMemo(
     () => strategies.find((s) => s.name === selectedStrategy),
@@ -106,6 +149,25 @@ export default function Backtest() {
     mutationFn: backtestApi.run,
     onSuccess: (data) => {
       setResult(data);
+      queryClient.invalidateQueries({ queryKey: ['backtest', 'history'] });
+    },
+  });
+
+  // Toggle favorite mutation
+  const toggleFavorite = useMutation({
+    mutationFn: ({ id, is_favorite }: { id: number; is_favorite: boolean }) =>
+      backtestApi.updateBacktest(id, { is_favorite }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['backtest', 'history'] });
+    },
+  });
+
+  // Delete backtest mutation
+  const deleteBacktest = useMutation({
+    mutationFn: backtestApi.deleteBacktest,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['backtest', 'history'] });
+      setSelectedHistoryId(null);
     },
   });
 
@@ -149,14 +211,210 @@ export default function Backtest() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">백테스팅</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          과거 데이터로 전략의 성과를 검증하세요
-        </p>
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">백테스팅</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            과거 데이터로 전략의 성과를 검증하세요
+          </p>
+        </div>
+        {/* Tabs */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => setActiveTab('run')}
+            className={clsx(
+              'px-4 py-2 rounded-lg font-medium transition-colors',
+              activeTab === 'run'
+                ? 'bg-primary-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            )}
+          >
+            백테스트 실행
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={clsx(
+              'px-4 py-2 rounded-lg font-medium transition-colors',
+              activeTab === 'history'
+                ? 'bg-primary-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            )}
+          >
+            히스토리
+          </button>
+        </div>
       </div>
 
-      {/* Configuration Panel */}
+      {/* History Tab */}
+      {activeTab === 'history' && (
+        <div className="space-y-4">
+          {/* Filters */}
+          <div className="bg-white rounded-lg shadow p-4 flex gap-4 items-center">
+            <select
+              value={historyFilter.strategy || ''}
+              onChange={(e) => setHistoryFilter({ ...historyFilter, strategy: e.target.value || undefined })}
+              className="px-3 py-2 border border-gray-300 rounded-md text-sm"
+            >
+              <option value="">모든 전략</option>
+              {strategies.map((s) => (
+                <option key={s.name} value={s.name}>{s.description}</option>
+              ))}
+            </select>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={historyFilter.favorites_only}
+                onChange={(e) => setHistoryFilter({ ...historyFilter, favorites_only: e.target.checked })}
+                className="rounded border-gray-300 text-primary-600"
+              />
+              즐겨찾기만
+            </label>
+          </div>
+
+          {/* History List */}
+          {historyLoading ? (
+            <div className="text-center py-8 text-gray-500">로딩 중...</div>
+          ) : history.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              백테스트 히스토리가 없습니다. 백테스트를 실행해보세요!
+            </div>
+          ) : (
+            <div className="bg-white rounded-lg shadow overflow-hidden">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">전략</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">종목</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">기간</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">수익률</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">샤프</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">MDD</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">거래</th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">액션</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {history.map((item) => (
+                    <tr
+                      key={item.id}
+                      className={clsx(
+                        'hover:bg-gray-50 cursor-pointer',
+                        selectedHistoryId === item.id && 'bg-primary-50'
+                      )}
+                      onClick={() => setSelectedHistoryId(item.id)}
+                    >
+                      <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                        {item.strategy_display_name || item.strategy_name}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {item.symbols.slice(0, 2).join(', ')}
+                        {item.symbols.length > 2 && ` +${item.symbols.length - 2}`}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {item.start_date} ~ {item.end_date}
+                      </td>
+                      <td className={clsx(
+                        'px-4 py-3 text-sm text-right font-medium',
+                        item.total_return_pct >= 0 ? 'text-green-600' : 'text-red-600'
+                      )}>
+                        {item.total_return_pct >= 0 ? '+' : ''}{item.total_return_pct.toFixed(2)}%
+                      </td>
+                      <td className="px-4 py-3 text-sm text-right text-gray-900">
+                        {item.sharpe_ratio?.toFixed(2) || '-'}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-right text-red-600">
+                        {item.max_drawdown?.toFixed(2) || '-'}%
+                      </td>
+                      <td className="px-4 py-3 text-sm text-right text-gray-900">
+                        {item.total_trades}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <div className="flex justify-center gap-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleFavorite.mutate({ id: item.id, is_favorite: !item.is_favorite });
+                            }}
+                            className={clsx(
+                              'text-lg',
+                              item.is_favorite ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-500'
+                            )}
+                          >
+                            {item.is_favorite ? '★' : '☆'}
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm('삭제하시겠습니까?')) {
+                                deleteBacktest.mutate(item.id);
+                              }
+                            }}
+                            className="text-gray-400 hover:text-red-500"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* History Detail */}
+          {historyDetail && (
+            <div className="bg-white rounded-lg shadow p-6">
+              <h3 className="text-lg font-semibold mb-4">
+                {historyDetail.strategy_display_name || historyDetail.strategy_name} 상세
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <div>
+                  <p className="text-sm text-gray-500">초기 자본</p>
+                  <p className="font-medium">{formatCurrency(historyDetail.initial_capital)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">최종 자산</p>
+                  <p className="font-medium">{formatCurrency(historyDetail.final_value)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">승률</p>
+                  <p className="font-medium">
+                    {historyDetail.winning_trades}/{historyDetail.total_trades} (
+                    {((historyDetail.winning_trades / historyDetail.total_trades) * 100 || 0).toFixed(1)}%)
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">실행일</p>
+                  <p className="font-medium">{new Date(historyDetail.created_at).toLocaleString('ko-KR')}</p>
+                </div>
+              </div>
+              {historyDetail.equity_curve && historyDetail.equity_curve.length > 0 && (
+                <ResponsiveContainer width="100%" height={200}>
+                  <AreaChart data={historyDetail.equity_curve}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(date) => new Date(date).toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })}
+                    />
+                    <YAxis tickFormatter={(value) => `${(value / 1000000).toFixed(0)}M`} />
+                    <Tooltip
+                      labelFormatter={(date) => new Date(date).toLocaleDateString('ko-KR')}
+                      formatter={(value: number) => [formatCurrency(value), '자산']}
+                    />
+                    <Area type="monotone" dataKey="equity" stroke="#2563eb" fill="#3b82f6" fillOpacity={0.3} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Run Tab - Configuration Panel */}
+      {activeTab === 'run' && (
+        <>
+
       <div className="bg-white rounded-lg shadow p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">설정</h2>
 
@@ -503,6 +761,8 @@ export default function Backtest() {
               )}
             </div>
           </div>
+        </>
+      )}
         </>
       )}
     </div>

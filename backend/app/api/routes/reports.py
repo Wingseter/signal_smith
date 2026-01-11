@@ -12,11 +12,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.api.routes.auth import get_current_user
 from app.models.user import User
 from app.models.stock import Stock, StockPrice
-from app.models.portfolio import Portfolio, Position
-from app.models.trading import Trade, TradingSignal
+from app.models.portfolio import Portfolio, PortfolioHolding as Position
+from app.models.transaction import Transaction as Trade, TradingSignal
 from app.services.report_generator import (
     ReportGenerator,
     ReportConfig,

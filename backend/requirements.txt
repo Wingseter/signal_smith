@@ -4,6 +4,7 @@ uvicorn[standard]==0.27.0
 python-multipart==0.0.6
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt==4.1.2
 
 # Database
 sqlalchemy==2.0.25
@@ -17,7 +18,9 @@ celery==5.3.6
 
 # Pydantic
 pydantic==2.5.3
+pydantic==2.5.3
 pydantic-settings==2.1.0
+email-validator
 
 # HTTP Client
 httpx==0.26.0
@@ -26,7 +29,7 @@ aiohttp==3.9.1
 
 # AI & LLM
 langgraph==0.0.43
-langchain==0.1.4
+langchain==0.1.9
 langchain-openai==0.0.5
 langchain-anthropic==0.1.1
 langchain-google-genai==0.0.6
@@ -38,7 +41,7 @@ google-generativeai==0.3.2
 pandas==2.1.4
 numpy==1.26.3
 scikit-learn==1.4.0
-ta-lib==0.4.28
+
 
 # PDF Generation
 reportlab==4.0.8

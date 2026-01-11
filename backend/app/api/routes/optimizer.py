@@ -11,10 +11,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.api.routes.auth import get_current_user
 from app.models.user import User
 from app.models.stock import Stock, StockPrice
-from app.models.portfolio import Portfolio, Holding
+from app.models.portfolio import Portfolio, PortfolioHolding as Holding
 from app.services.portfolio_optimizer import (
     PortfolioOptimizer,
     OptimizationMethod,

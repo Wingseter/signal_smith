@@ -12,9 +12,9 @@ from sqlalchemy import func, and_, case
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.api.routes.auth import get_current_user
 from app.models.user import User
-from app.models.trading import Order, TradingSignal
+from app.models.transaction import Transaction as Order, TradingSignal
 from app.models.stock import StockPrice
 
 import numpy as np

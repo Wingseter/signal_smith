@@ -3,15 +3,18 @@ Backtesting API Endpoints
 """
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.api.routes.auth import get_current_user
 from app.models.user import User
+from app.models.backtest import BacktestResult as BacktestResultModel, BacktestComparison
 from app.services.backtesting import (
     BacktestEngine,
     MACrossoverStrategy,
@@ -40,11 +43,13 @@ class BacktestRequest(BaseModel):
     initial_capital: float = Field(default=10_000_000, description="Initial capital in KRW")
     parameters: Optional[Dict[str, Any]] = Field(default=None, description="Strategy parameters")
     config: Optional[Dict[str, Any]] = Field(default=None, description="Backtest configuration")
+    save_result: bool = Field(default=True, description="Save result to database")
 
 
 class BacktestResponse(BaseModel):
     """Response model for backtest results."""
     success: bool
+    id: Optional[int] = None  # Database ID if saved
     strategy_name: str
     start_date: str
     end_date: str
@@ -68,6 +73,34 @@ class StrategyInfo(BaseModel):
 class StrategiesResponse(BaseModel):
     """Response with available strategies."""
     strategies: List[StrategyInfo]
+
+
+class BacktestHistoryItem(BaseModel):
+    """Backtest history item."""
+    id: int
+    strategy_name: str
+    strategy_display_name: Optional[str]
+    symbols: List[str]
+    start_date: str
+    end_date: str
+    initial_capital: float
+    final_value: float
+    total_return_pct: float
+    total_trades: int
+    sharpe_ratio: Optional[float]
+    max_drawdown: Optional[float]
+    win_rate: Optional[float]
+    is_favorite: bool
+    tags: Optional[List[str]]
+    notes: Optional[str]
+    created_at: str
+
+
+class UpdateBacktestRequest(BaseModel):
+    """Request to update backtest metadata."""
+    is_favorite: Optional[bool] = None
+    notes: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 
 # Available strategies registry
@@ -225,15 +258,52 @@ async def run_backtest(
 
     # Convert result to response
     result_dict = result.to_dict()
+    total_return_pct = ((result.final_value - request.initial_capital) / request.initial_capital) * 100
+
+    # Calculate winning/losing trades
+    winning_trades = sum(1 for t in result.trades if t.pnl and t.pnl > 0)
+    losing_trades = sum(1 for t in result.trades if t.pnl and t.pnl < 0)
+
+    # Save to database if requested
+    saved_id = None
+    if request.save_result:
+        try:
+            db_result = BacktestResultModel(
+                user_id=current_user.id,
+                strategy_name=request.strategy,
+                strategy_display_name=strategy_info["name"],
+                parameters=params,
+                symbols=request.symbols,
+                start_date=start_date,
+                end_date=end_date,
+                initial_capital=Decimal(str(request.initial_capital)),
+                final_value=Decimal(str(result.final_value)),
+                total_return_pct=Decimal(str(total_return_pct)),
+                total_trades=len(result.trades),
+                winning_trades=winning_trades,
+                losing_trades=losing_trades,
+                metrics=result_dict["metrics"],
+                trades=result_dict["trades"],
+                equity_curve=result_dict["equity_curve"],
+            )
+            db.add(db_result)
+            db.commit()
+            db.refresh(db_result)
+            saved_id = db_result.id
+            logger.info(f"Saved backtest result with ID {saved_id}")
+        except Exception as e:
+            logger.error(f"Failed to save backtest result: {e}")
+            db.rollback()
 
     return BacktestResponse(
         success=True,
+        id=saved_id,
         strategy_name=result.strategy_name,
         start_date=result_dict["start_date"],
         end_date=result_dict["end_date"],
         initial_capital=result.initial_capital,
         final_value=result.final_value,
-        total_return_pct=result_dict["total_return_pct"],
+        total_return_pct=total_return_pct,
         num_trades=len(result.trades),
         metrics=result_dict["metrics"],
         trades=result_dict["trades"],
@@ -249,6 +319,7 @@ async def compare_strategies(
     end_date: str,
     strategies: Optional[List[str]] = None,
     initial_capital: float = 10_000_000,
+    save_result: bool = True,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -303,25 +374,247 @@ async def compare_strategies(
         reverse=True,
     )
 
-    return {
+    response = {
         "results": results,
         "ranking": [{"strategy": k, "sharpe_ratio": v} for k, v in ranking],
         "best_strategy": ranking[0][0] if ranking else None,
     }
 
+    # Save comparison to database
+    if save_result:
+        try:
+            comparison = BacktestComparison(
+                user_id=current_user.id,
+                name=f"Comparison {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                symbols=symbols,
+                start_date=start,
+                end_date=end,
+                initial_capital=Decimal(str(initial_capital)),
+                strategies=strategy_names,
+                results=results,
+                best_strategy=response["best_strategy"],
+                ranking=response["ranking"],
+            )
+            db.add(comparison)
+            db.commit()
+            db.refresh(comparison)
+            response["comparison_id"] = comparison.id
+        except Exception as e:
+            logger.error(f"Failed to save comparison: {e}")
+            db.rollback()
+
+    return response
+
 
 @router.get("/history")
 async def get_backtest_history(
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    strategy: Optional[str] = None,
+    favorites_only: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Get user's backtest history.
-    (To be implemented with database storage)
     """
-    # TODO: Implement database storage for backtest history
-    return []
+    query = db.query(BacktestResultModel).filter(
+        BacktestResultModel.user_id == current_user.id
+    )
+
+    if strategy:
+        query = query.filter(BacktestResultModel.strategy_name == strategy)
+
+    if favorites_only:
+        query = query.filter(BacktestResultModel.is_favorite == True)
+
+    # Get total count
+    total = query.count()
+
+    # Get paginated results
+    results = (
+        query
+        .order_by(desc(BacktestResultModel.created_at))
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    history = []
+    for r in results:
+        metrics = r.metrics or {}
+        history.append(BacktestHistoryItem(
+            id=r.id,
+            strategy_name=r.strategy_name,
+            strategy_display_name=r.strategy_display_name,
+            symbols=r.symbols,
+            start_date=r.start_date.strftime("%Y-%m-%d"),
+            end_date=r.end_date.strftime("%Y-%m-%d"),
+            initial_capital=float(r.initial_capital),
+            final_value=float(r.final_value),
+            total_return_pct=float(r.total_return_pct),
+            total_trades=r.total_trades,
+            sharpe_ratio=metrics.get("sharpe_ratio"),
+            max_drawdown=metrics.get("max_drawdown"),
+            win_rate=metrics.get("win_rate"),
+            is_favorite=r.is_favorite,
+            tags=r.tags,
+            notes=r.notes,
+            created_at=r.created_at.isoformat(),
+        ).model_dump())
+
+    return {
+        "history": history,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/history/{backtest_id}")
+async def get_backtest_detail(
+    backtest_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Get detailed backtest result by ID.
+    """
+    result = (
+        db.query(BacktestResultModel)
+        .filter(
+            BacktestResultModel.id == backtest_id,
+            BacktestResultModel.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Backtest result not found")
+
+    return {
+        "id": result.id,
+        "strategy_name": result.strategy_name,
+        "strategy_display_name": result.strategy_display_name,
+        "parameters": result.parameters,
+        "symbols": result.symbols,
+        "start_date": result.start_date.strftime("%Y-%m-%d"),
+        "end_date": result.end_date.strftime("%Y-%m-%d"),
+        "initial_capital": float(result.initial_capital),
+        "final_value": float(result.final_value),
+        "total_return_pct": float(result.total_return_pct),
+        "total_trades": result.total_trades,
+        "winning_trades": result.winning_trades,
+        "losing_trades": result.losing_trades,
+        "metrics": result.metrics,
+        "trades": result.trades,
+        "equity_curve": result.equity_curve,
+        "is_favorite": result.is_favorite,
+        "notes": result.notes,
+        "tags": result.tags,
+        "created_at": result.created_at.isoformat(),
+    }
+
+
+@router.patch("/history/{backtest_id}")
+async def update_backtest(
+    backtest_id: int,
+    request: UpdateBacktestRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Update backtest metadata (favorite, notes, tags).
+    """
+    result = (
+        db.query(BacktestResultModel)
+        .filter(
+            BacktestResultModel.id == backtest_id,
+            BacktestResultModel.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Backtest result not found")
+
+    if request.is_favorite is not None:
+        result.is_favorite = request.is_favorite
+
+    if request.notes is not None:
+        result.notes = request.notes
+
+    if request.tags is not None:
+        result.tags = request.tags
+
+    db.commit()
+    db.refresh(result)
+
+    return {"message": "Updated successfully", "id": result.id}
+
+
+@router.delete("/history/{backtest_id}")
+async def delete_backtest(
+    backtest_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, str]:
+    """
+    Delete a backtest result.
+    """
+    result = (
+        db.query(BacktestResultModel)
+        .filter(
+            BacktestResultModel.id == backtest_id,
+            BacktestResultModel.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Backtest result not found")
+
+    db.delete(result)
+    db.commit()
+
+    return {"message": "Deleted successfully"}
+
+
+@router.get("/comparisons")
+async def get_comparison_history(
+    limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Get user's strategy comparison history.
+    """
+    comparisons = (
+        db.query(BacktestComparison)
+        .filter(BacktestComparison.user_id == current_user.id)
+        .order_by(desc(BacktestComparison.created_at))
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "comparisons": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "symbols": c.symbols,
+                "start_date": c.start_date.strftime("%Y-%m-%d"),
+                "end_date": c.end_date.strftime("%Y-%m-%d"),
+                "initial_capital": float(c.initial_capital),
+                "strategies": c.strategies,
+                "best_strategy": c.best_strategy,
+                "ranking": c.ranking,
+                "created_at": c.created_at.isoformat(),
+            }
+            for c in comparisons
+        ]
+    }
 
 
 async def _fetch_historical_data(

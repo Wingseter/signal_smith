@@ -53,8 +53,9 @@ export const authApi = {
     });
     return response.data;
   },
-  getMe: async () => {
-    const response = await api.get('/auth/me');
+  getMe: async (token?: string) => {
+    const config = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
+    const response = await api.get('/auth/me', config);
     return response.data;
   },
 };
@@ -353,6 +354,7 @@ export const backtestApi = {
     initial_capital?: number;
     parameters?: Record<string, unknown>;
     config?: Record<string, unknown>;
+    save_result?: boolean;
   }) => {
     const response = await api.post('/backtest/run', data);
     return response.data;
@@ -367,8 +369,33 @@ export const backtestApi = {
     const response = await api.post('/backtest/compare', null, { params });
     return response.data;
   },
-  getHistory: async (limit?: number) => {
-    const response = await api.get('/backtest/history', { params: { limit } });
+  getHistory: async (params?: {
+    limit?: number;
+    offset?: number;
+    strategy?: string;
+    favorites_only?: boolean;
+  }) => {
+    const response = await api.get('/backtest/history', { params });
+    return response.data;
+  },
+  getDetail: async (id: number) => {
+    const response = await api.get(`/backtest/history/${id}`);
+    return response.data;
+  },
+  updateBacktest: async (id: number, data: {
+    is_favorite?: boolean;
+    notes?: string;
+    tags?: string[];
+  }) => {
+    const response = await api.patch(`/backtest/history/${id}`, data);
+    return response.data;
+  },
+  deleteBacktest: async (id: number) => {
+    const response = await api.delete(`/backtest/history/${id}`);
+    return response.data;
+  },
+  getComparisons: async (limit?: number) => {
+    const response = await api.get('/backtest/comparisons', { params: { limit } });
     return response.data;
   },
 };
