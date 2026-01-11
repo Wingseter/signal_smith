@@ -338,3 +338,37 @@ export const notificationsApi = {
     return response.data;
   },
 };
+
+// Backtesting API
+export const backtestApi = {
+  getStrategies: async () => {
+    const response = await api.get('/backtest/strategies');
+    return response.data;
+  },
+  run: async (data: {
+    strategy: string;
+    symbols: string[];
+    start_date: string;
+    end_date: string;
+    initial_capital?: number;
+    parameters?: Record<string, unknown>;
+    config?: Record<string, unknown>;
+  }) => {
+    const response = await api.post('/backtest/run', data);
+    return response.data;
+  },
+  compare: async (params: {
+    symbols: string[];
+    start_date: string;
+    end_date: string;
+    strategies?: string[];
+    initial_capital?: number;
+  }) => {
+    const response = await api.post('/backtest/compare', null, { params });
+    return response.data;
+  },
+  getHistory: async (limit?: number) => {
+    const response = await api.get('/backtest/history', { params: { limit } });
+    return response.data;
+  },
+};

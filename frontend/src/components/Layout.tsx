@@ -9,6 +9,7 @@ const navItems = [
   { path: '/stocks', label: 'Stocks', icon: '📈' },
   { path: '/portfolio', label: 'Portfolio', icon: '💼' },
   { path: '/trading', label: 'Trading', icon: '💹' },
+  { path: '/backtest', label: 'Backtest', icon: '⏱️' },
   { path: '/agents', label: 'AI Agents', icon: '🤖' },
   { path: '/settings/notifications', label: 'Alerts', icon: '🔔' },
 ];

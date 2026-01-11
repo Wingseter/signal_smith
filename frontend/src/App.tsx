@@ -11,6 +11,7 @@ import TradingSignals from './components/Trading/TradingSignals';
 import AgentMonitor from './components/AgentMonitor/AgentMonitor';
 import AnalysisPanel from './components/Analysis/AnalysisPanel';
 import NotificationSettings from './components/Settings/NotificationSettings';
+import Backtest from './components/Backtest/Backtest';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -37,6 +38,7 @@ function App() {
         <Route path="signals" element={<TradingSignals />} />
         <Route path="agents" element={<AgentMonitor />} />
         <Route path="analysis" element={<AnalysisPanel />} />
+        <Route path="backtest" element={<Backtest />} />
         <Route path="settings/notifications" element={<NotificationSettings />} />
       </Route>
     </Routes>
