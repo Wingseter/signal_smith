@@ -11,6 +11,7 @@ const navItems = [
   { path: '/trading', label: 'Trading', icon: '💹' },
   { path: '/backtest', label: 'Backtest', icon: '⏱️' },
   { path: '/performance', label: 'Performance', icon: '📉' },
+  { path: '/optimizer', label: 'Optimizer', icon: '⚖️' },
   { path: '/agents', label: 'AI Agents', icon: '🤖' },
   { path: '/settings/notifications', label: 'Alerts', icon: '🔔' },
 ];

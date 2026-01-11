@@ -13,6 +13,7 @@ import AnalysisPanel from './components/Analysis/AnalysisPanel';
 import NotificationSettings from './components/Settings/NotificationSettings';
 import Backtest from './components/Backtest/Backtest';
 import PerformanceDashboard from './components/Performance/PerformanceDashboard';
+import PortfolioOptimizer from './components/Optimizer/PortfolioOptimizer';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -41,6 +42,7 @@ function App() {
         <Route path="analysis" element={<AnalysisPanel />} />
         <Route path="backtest" element={<Backtest />} />
         <Route path="performance" element={<PerformanceDashboard />} />
+        <Route path="optimizer" element={<PortfolioOptimizer />} />
         <Route path="settings/notifications" element={<NotificationSettings />} />
       </Route>
     </Routes>
