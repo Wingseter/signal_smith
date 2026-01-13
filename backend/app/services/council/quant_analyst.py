@@ -6,6 +6,8 @@ GPT 퀀트 분석가
 - 거래량 분석
 - 차트 패턴 분석
 - 리스크 관리 관점의 투자 비율 제안
+
+v2: 키움증권 실제 차트 데이터 연동
 """
 
 import logging
@@ -16,6 +18,7 @@ from openai import AsyncOpenAI
 
 from app.config import settings
 from .models import CouncilMessage, AnalystRole
+from .technical_indicators import TechnicalAnalysisResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ class QuantAnalyst:
 4. 리스크 관리: 변동성, 손절가, 포지션 사이징
 
 응답 형식:
-- 분석 결과는 구체적인 수치와 함께 제시
+- 제공된 실제 기술적 지표 데이터를 기반으로 분석
 - 투자 비율은 총 자금 대비 %로 제안
 - 한국어로 간결하게 답변"""
 
@@ -44,6 +47,9 @@ class QuantAnalyst:
 종목명: {company_name}
 뉴스: {news_title}
 
+[실제 기술적 지표 데이터]
+{technical_data}
+
 [이전 대화]
 {conversation}
 
@@ -53,7 +59,38 @@ class QuantAnalyst:
 [응답 형식]
 다음 JSON 형식으로 응답해주세요:
 {{
-    "analysis": "기술적 분석 내용 (2-3문장)",
+    "analysis": "기술적 분석 내용 (2-3문장, 위의 실제 지표 데이터 기반)",
+    "score": 1-10 사이 점수,
+    "suggested_percent": 제안 투자 비율 (0-100),
+    "reasoning": "투자 비율 산정 근거 (실제 지표값 인용)",
+    "risk_factors": ["리스크 요소 1", "리스크 요소 2"],
+    "entry_price": 권장 진입가 (정수),
+    "stop_loss": 손절가 (정수),
+    "target_price": 목표가 (정수),
+    "reply_to_other": "다른 분석가에게 하고 싶은 말 (선택)"
+}}"""
+
+    # 기술적 데이터 없이 뉴스만으로 분석할 때 사용
+    ANALYSIS_PROMPT_NO_DATA = """다음 종목에 대한 퀀트/기술적 분석을 수행해주세요.
+
+[종목 정보]
+종목코드: {symbol}
+종목명: {company_name}
+뉴스: {news_title}
+
+[기술적 데이터]
+⚠️ 실시간 차트 데이터를 조회할 수 없습니다. 일반적인 기술적 분석 관점에서 의견을 제시해주세요.
+
+[이전 대화]
+{conversation}
+
+[요청]
+{request}
+
+[응답 형식]
+다음 JSON 형식으로 응답해주세요:
+{{
+    "analysis": "기술적 분석 관점의 의견 (2-3문장)",
     "score": 1-10 사이 점수,
     "suggested_percent": 제안 투자 비율 (0-100),
     "reasoning": "투자 비율 산정 근거",
@@ -96,6 +133,7 @@ class QuantAnalyst:
         company_name: str,
         news_title: str,
         previous_messages: list[CouncilMessage],
+        technical_data: Optional[TechnicalAnalysisResult] = None,
         request: str = "기술적 분석을 수행하고 투자 비율을 제안해주세요."
     ) -> CouncilMessage:
         """퀀트 분석 수행"""
@@ -103,13 +141,26 @@ class QuantAnalyst:
 
         conversation = self._build_conversation(previous_messages)
 
-        prompt = self.ANALYSIS_PROMPT.format(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            conversation=conversation,
-            request=request,
-        )
+        # 기술적 데이터 유무에 따라 프롬프트 선택
+        if technical_data and technical_data.current_price > 0:
+            prompt = self.ANALYSIS_PROMPT.format(
+                symbol=symbol,
+                company_name=company_name,
+                news_title=news_title,
+                technical_data=technical_data.to_prompt_text(),
+                conversation=conversation,
+                request=request,
+            )
+            logger.info(f"[퀀트분석] {symbol} - 실제 차트 데이터 사용 (현재가: {technical_data.current_price:,}원)")
+        else:
+            prompt = self.ANALYSIS_PROMPT_NO_DATA.format(
+                symbol=symbol,
+                company_name=company_name,
+                news_title=news_title,
+                conversation=conversation,
+                request=request,
+            )
+            logger.warning(f"[퀀트분석] {symbol} - 차트 데이터 없이 분석")
 
         try:
             response = await self._client.chat.completions.create(
@@ -119,7 +170,7 @@ class QuantAnalyst:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
-                max_tokens=500,
+                max_tokens=700,
             )
 
             response_text = response.choices[0].message.content
@@ -136,19 +187,35 @@ class QuantAnalyst:
 
                 data = json.loads(json_str.strip())
 
+                # 기술적 데이터가 있는 경우 추가 정보 포함
                 content = f"""📊 **퀀트 분석 결과**
 
 {data.get('analysis', '')}
 
 • 기술적 점수: {data.get('score', 5)}/10
 • 제안 투자 비율: {data.get('suggested_percent', 0)}%
-• 근거: {data.get('reasoning', '')}
+• 근거: {data.get('reasoning', '')}"""
+
+                # 매매 가격 정보 (있는 경우)
+                if data.get('entry_price'):
+                    content += f"""
+
+💰 매매 전략:
+• 진입가: {data.get('entry_price'):,}원
+• 손절가: {data.get('stop_loss', 0):,}원
+• 목표가: {data.get('target_price', 0):,}원"""
+
+                content += f"""
 
 ⚠️ 리스크 요소:
 {chr(10).join(f"- {r}" for r in data.get('risk_factors', []))}"""
 
                 if data.get('reply_to_other'):
                     content += f"\n\n💬 {data.get('reply_to_other')}"
+
+                # 실제 데이터 사용 여부 표시
+                if technical_data and technical_data.current_price > 0:
+                    content += f"\n\n📈 *키움증권 실시간 데이터 기반 분석*"
 
             except json.JSONDecodeError:
                 # JSON 파싱 실패 시 원본 텍스트 사용
@@ -178,6 +245,7 @@ class QuantAnalyst:
         news_title: str,
         previous_messages: list[CouncilMessage],
         other_analysis: str,
+        technical_data: Optional[TechnicalAnalysisResult] = None,
     ) -> CouncilMessage:
         """다른 분석가의 의견에 응답"""
         request = f"""펀더멘털 분석가의 의견을 검토하고 응답해주세요:
@@ -192,6 +260,7 @@ class QuantAnalyst:
             company_name=company_name,
             news_title=news_title,
             previous_messages=previous_messages,
+            technical_data=technical_data,
             request=request,
         )
 

@@ -2,12 +2,13 @@
 AI 투자 회의 오케스트레이터
 
 회의 진행을 관리하고 합의를 도출하는 오케스트레이터
+
+v2: 키움증권 실제 차트 데이터 연동
 """
 
 import logging
 from datetime import datetime
 from typing import Optional, List, Callable, Awaitable
-import asyncio
 
 from app.config import settings
 from .models import (
@@ -16,6 +17,8 @@ from .models import (
 )
 from .quant_analyst import quant_analyst
 from .fundamental_analyst import fundamental_analyst
+from .technical_indicators import technical_calculator, TechnicalAnalysisResult
+from .dart_client import dart_client, FinancialData
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,71 @@ class CouncilOrchestrator:
             except Exception as e:
                 logger.error(f"회의 콜백 오류: {e}")
 
+    async def _fetch_technical_data(self, symbol: str) -> Optional[TechnicalAnalysisResult]:
+        """키움증권에서 차트 데이터 조회 및 기술적 지표 계산"""
+        try:
+            from app.services.kiwoom.rest_client import kiwoom_client
+
+            # 키움 API 연결 확인
+            if not await kiwoom_client.is_connected():
+                try:
+                    await kiwoom_client.connect()
+                except Exception as conn_error:
+                    logger.warning(f"키움 API 연결 실패: {conn_error}")
+                    return None
+
+            # 일봉 데이터 조회 (최근 100일)
+            daily_prices = await kiwoom_client.get_daily_prices(symbol)
+
+            if not daily_prices:
+                logger.warning(f"[{symbol}] 일봉 데이터 없음")
+                return None
+
+            logger.info(f"[{symbol}] 일봉 데이터 {len(daily_prices)}개 조회 완료")
+
+            # 기술적 지표 계산
+            technical_result = technical_calculator.analyze(symbol, daily_prices)
+
+            logger.info(
+                f"[{symbol}] 기술적 분석 완료 - "
+                f"현재가: {technical_result.current_price:,}원, "
+                f"RSI: {technical_result.rsi_14}, "
+                f"점수: {technical_result.technical_score}/10"
+            )
+
+            return technical_result
+
+        except ImportError:
+            logger.error("키움 클라이언트 모듈 임포트 실패")
+            return None
+        except Exception as e:
+            logger.error(f"기술적 데이터 조회 오류 [{symbol}]: {e}")
+            return None
+
+    async def _fetch_financial_data(self, symbol: str) -> Optional[FinancialData]:
+        """DART에서 재무제표 데이터 조회"""
+        try:
+            # 종목코드로 재무제표 조회
+            financial_data = await dart_client.get_financial_data_by_stock_code(symbol)
+
+            if not financial_data:
+                logger.warning(f"[{symbol}] DART 재무제표 데이터 없음")
+                return None
+
+            logger.info(
+                f"[{symbol}] DART 재무제표 조회 완료 - "
+                f"매출: {financial_data.revenue:,}원, "
+                f"PER: {financial_data.per}, "
+                f"ROE: {financial_data.roe}%"
+                if financial_data.revenue else f"[{symbol}] DART 재무제표 일부 데이터 없음"
+            )
+
+            return financial_data
+
+        except Exception as e:
+            logger.error(f"DART 재무제표 조회 오류 [{symbol}]: {e}")
+            return None
+
     async def start_meeting(
         self,
         symbol: str,
@@ -77,7 +145,21 @@ class CouncilOrchestrator:
             news_score=news_score,
         )
 
+        # 0. 키움증권에서 실제 차트 데이터 조회
+        technical_data = await self._fetch_technical_data(symbol)
+
+        # 0-2. DART에서 재무제표 데이터 조회
+        financial_data = await self._fetch_financial_data(symbol)
+
+        # 실시간 현재가 업데이트
+        if technical_data and technical_data.current_price > 0:
+            current_price = technical_data.current_price
+
         # 1. 회의 소집 메시지
+        chart_status = "📈 키움증권 실시간 데이터" if technical_data else "⚠️ 차트 데이터 없음"
+        dart_status = "📋 DART 재무제표" if financial_data else "⚠️ 재무제표 없음"
+        data_status = f"{chart_status} | {dart_status}"
+
         opening_msg = CouncilMessage(
             role=AnalystRole.GEMINI_JUDGE,
             speaker="Gemini 뉴스 판단",
@@ -87,8 +169,15 @@ class CouncilOrchestrator:
 뉴스 점수: {news_score}/10
 
 이 뉴스가 {company_name}({symbol})의 주가에 긍정적 영향을 줄 것으로 판단됩니다.
-투자 회의를 시작합니다.""",
-            data={"news_score": news_score, "trigger": "news"},
+투자 회의를 시작합니다.
+
+{data_status}""",
+            data={
+                "news_score": news_score,
+                "trigger": "news",
+                "has_chart_data": technical_data is not None,
+                "has_financial_data": financial_data is not None,
+            },
         )
         meeting.add_message(opening_msg)
         await self._notify_meeting_update(meeting)
@@ -96,12 +185,13 @@ class CouncilOrchestrator:
         # 2. 라운드 1: 초기 분석
         meeting.current_round = 1
 
-        # GPT 퀀트 분석
+        # GPT 퀀트 분석 (실제 차트 데이터 전달)
         quant_msg = await quant_analyst.analyze(
             symbol=symbol,
             company_name=company_name,
             news_title=news_title,
             previous_messages=meeting.messages,
+            technical_data=technical_data,  # 실제 차트 데이터 전달
         )
         meeting.add_message(quant_msg)
         await self._notify_meeting_update(meeting)
@@ -109,12 +199,13 @@ class CouncilOrchestrator:
         quant_percent = quant_msg.data.get("suggested_percent", 0) if quant_msg.data else 0
         quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5
 
-        # Claude 펀더멘털 분석
+        # Claude 펀더멘털 분석 (DART 실제 재무제표 전달)
         fundamental_msg = await fundamental_analyst.analyze(
             symbol=symbol,
             company_name=company_name,
             news_title=news_title,
             previous_messages=meeting.messages,
+            financial_data=financial_data,  # DART 재무제표 데이터 전달
         )
         meeting.add_message(fundamental_msg)
         await self._notify_meeting_update(meeting)
@@ -125,13 +216,14 @@ class CouncilOrchestrator:
         # 3. 라운드 2: 상호 검토 및 조정
         meeting.current_round = 2
 
-        # GPT가 Claude 의견에 응답
+        # GPT가 Claude 의견에 응답 (차트 데이터 유지)
         quant_response = await quant_analyst.respond_to(
             symbol=symbol,
             company_name=company_name,
             news_title=news_title,
             previous_messages=meeting.messages,
             other_analysis=fundamental_msg.content,
+            technical_data=technical_data,  # 실제 차트 데이터 전달
         )
         meeting.add_message(quant_response)
         await self._notify_meeting_update(meeting)
@@ -182,6 +274,11 @@ class CouncilOrchestrator:
         # 신뢰도 계산
         confidence = (quant_score + fundamental_score) / 20  # 0-1 스케일
 
+        # 기술적 분석 데이터가 있으면 진입가/손절가/목표가 포함
+        entry_price = quant_msg.data.get("entry_price") if quant_msg.data else None
+        stop_loss = quant_msg.data.get("stop_loss") if quant_msg.data else None
+        target_price = quant_msg.data.get("target_price") if quant_msg.data else None
+
         signal = InvestmentSignal(
             symbol=symbol,
             company_name=company_name,
@@ -209,6 +306,14 @@ class CouncilOrchestrator:
         meeting.ended_at = datetime.now()
 
         # 6. 최종 결론 메시지
+        price_info = ""
+        if entry_price:
+            price_info = f"""
+📍 매매 전략:
+• 진입가: {entry_price:,}원
+• 손절가: {stop_loss:,}원
+• 목표가: {target_price:,}원"""
+
         conclusion_msg = CouncilMessage(
             role=AnalystRole.MODERATOR,
             speaker="회의 중재자",
@@ -221,8 +326,13 @@ class CouncilOrchestrator:
 
 퀀트 점수: {signal.quant_score}/10
 펀더멘털 점수: {signal.fundamental_score}/10
+{price_info}
 
-상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 승인 대기 중"}""",
+상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 승인 대기 중"}
+
+📊 데이터 소스:
+{"• 📈 키움증권 실시간 차트 데이터" if technical_data else "• ⚠️ 차트 데이터 없음"}
+{"• 📋 DART 전자공시 재무제표" if financial_data else "• ⚠️ 재무제표 없음"}""",
             data=signal.to_dict(),
         )
         meeting.add_message(conclusion_msg)

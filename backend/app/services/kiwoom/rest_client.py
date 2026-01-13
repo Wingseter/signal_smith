@@ -289,7 +289,16 @@ class KiwoomRestClient(KiwoomBaseClient):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """일봉 데이터 조회 (ka10081 - 주식일봉차트조회요청)"""
+        """일봉 데이터 조회 (ka10081 - 주식일봉차트조회요청)
+
+        Args:
+            symbol: 종목코드 (예: 005930)
+            start_date: 시작일 (미사용, 연속조회로 대체)
+            end_date: 기준일자 (YYYYMMDD, 기본값: 오늘)
+
+        Returns:
+            일봉 데이터 리스트 (최신순)
+        """
         if not end_date:
             end_date = datetime.now().strftime("%Y%m%d")
 
@@ -298,25 +307,26 @@ class KiwoomRestClient(KiwoomBaseClient):
                 "POST",
                 "/api/dostk/chart",
                 data={
-                    "trnm": "ka10081",
                     "stk_cd": symbol,
                     "base_dt": end_date,
-                    "req_cnt": "100",  # 요청 건수
+                    "upd_stkpc_tp": "1",  # 수정주가 적용 (필수 파라미터)
                 },
                 api_id="ka10081"
             )
 
             if result.get("return_code") != 0:
+                logger.warning(f"일봉 조회 API 오류 [{symbol}]: {result.get('return_msg')}")
                 return []
 
             prices = []
-            for item in result.get("data", {}).get("chart", []):
+            # 응답 필드명: stk_dt_pole_chart_qry (주식일봉차트조회)
+            for item in result.get("stk_dt_pole_chart_qry", []):
                 prices.append({
                     "date": item.get("dt"),
-                    "open": int(item.get("open_prc", 0)),
-                    "high": int(item.get("high_prc", 0)),
-                    "low": int(item.get("low_prc", 0)),
-                    "close": int(item.get("clos_prc", 0)),
+                    "open": self._parse_signed_int(item.get("open_pric", "0")),
+                    "high": self._parse_signed_int(item.get("high_pric", "0")),
+                    "low": self._parse_signed_int(item.get("low_pric", "0")),
+                    "close": self._parse_signed_int(item.get("cur_prc", "0")),  # 현재가 = 종가
                     "volume": int(item.get("trde_qty", 0)),
                 })
             return prices

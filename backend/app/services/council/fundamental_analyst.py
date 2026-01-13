@@ -6,6 +6,8 @@ Claude 펀더멘털 분석가
 - 사업 모델 분석
 - 경쟁력 분석
 - 성장성 분석
+
+v2: DART API 실제 재무제표 데이터 연동
 """
 
 import logging
@@ -16,6 +18,7 @@ import anthropic
 
 from app.config import settings
 from .models import CouncilMessage, AnalystRole
+from .dart_client import FinancialData
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,9 @@ class FundamentalAnalyst:
 종목명: {company_name}
 뉴스: {news_title}
 
+[실제 재무제표 데이터 (DART 전자공시)]
+{financial_data}
+
 [이전 대화]
 {conversation}
 
@@ -54,7 +60,36 @@ class FundamentalAnalyst:
 [응답 형식]
 다음 JSON 형식으로 응답해주세요:
 {{
-    "analysis": "펀더멘털 분석 내용 (2-3문장)",
+    "analysis": "펀더멘털 분석 내용 (2-3문장, 위의 실제 재무제표 데이터 기반)",
+    "score": 1-10 사이 점수,
+    "suggested_percent": 제안 투자 비율 (0-100),
+    "reasoning": "투자 비율 산정 근거 (실제 재무지표 인용)",
+    "growth_factors": ["성장 요소 1", "성장 요소 2"],
+    "valuation_opinion": "현재 밸류에이션에 대한 의견 (PER/PBR 기반)",
+    "reply_to_other": "다른 분석가에게 하고 싶은 말 (선택)"
+}}"""
+
+    # 재무 데이터 없이 분석할 때 사용
+    ANALYSIS_PROMPT_NO_DATA = """다음 종목에 대한 펀더멘털 분석을 수행해주세요.
+
+[종목 정보]
+종목코드: {symbol}
+종목명: {company_name}
+뉴스: {news_title}
+
+[재무제표 데이터]
+⚠️ DART에서 재무제표를 조회할 수 없습니다. 일반적인 펀더멘털 관점에서 의견을 제시해주세요.
+
+[이전 대화]
+{conversation}
+
+[요청]
+{request}
+
+[응답 형식]
+다음 JSON 형식으로 응답해주세요:
+{{
+    "analysis": "펀더멘털 분석 관점의 의견 (2-3문장)",
     "score": 1-10 사이 점수,
     "suggested_percent": 제안 투자 비율 (0-100),
     "reasoning": "투자 비율 산정 근거",
@@ -97,6 +132,7 @@ class FundamentalAnalyst:
         company_name: str,
         news_title: str,
         previous_messages: list[CouncilMessage],
+        financial_data: Optional[FinancialData] = None,
         request: str = "펀더멘털 분석을 수행하고 투자 비율을 제안해주세요."
     ) -> CouncilMessage:
         """펀더멘털 분석 수행"""
@@ -104,13 +140,26 @@ class FundamentalAnalyst:
 
         conversation = self._build_conversation(previous_messages)
 
-        prompt = self.ANALYSIS_PROMPT.format(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            conversation=conversation,
-            request=request,
-        )
+        # 재무 데이터 유무에 따라 프롬프트 선택
+        if financial_data and financial_data.revenue:
+            prompt = self.ANALYSIS_PROMPT.format(
+                symbol=symbol,
+                company_name=company_name,
+                news_title=news_title,
+                financial_data=financial_data.to_prompt_text(),
+                conversation=conversation,
+                request=request,
+            )
+            logger.info(f"[펀더멘털분석] {symbol} - DART 실제 재무제표 사용")
+        else:
+            prompt = self.ANALYSIS_PROMPT_NO_DATA.format(
+                symbol=symbol,
+                company_name=company_name,
+                news_title=news_title,
+                conversation=conversation,
+                request=request,
+            )
+            logger.warning(f"[펀더멘털분석] {symbol} - 재무제표 없이 분석")
 
         try:
             response = await self._client.messages.create(
@@ -147,8 +196,19 @@ class FundamentalAnalyst:
 📊 성장 요소:
 {chr(10).join(f"- {g}" for g in data.get('growth_factors', []))}"""
 
+                # 밸류에이션 의견 (있는 경우)
+                if data.get('valuation_opinion'):
+                    content += f"""
+
+💰 밸류에이션 의견:
+{data.get('valuation_opinion')}"""
+
                 if data.get('reply_to_other'):
                     content += f"\n\n💬 {data.get('reply_to_other')}"
+
+                # 실제 데이터 사용 여부 표시
+                if financial_data and financial_data.revenue:
+                    content += f"\n\n📋 *DART 전자공시 재무제표 기반 분석*"
 
             except json.JSONDecodeError:
                 # JSON 파싱 실패 시 원본 텍스트 사용
