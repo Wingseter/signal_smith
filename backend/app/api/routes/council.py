@@ -18,7 +18,7 @@ from app.services.news import news_trader, news_monitor
 from app.services.council import council_orchestrator, CouncilMeeting, InvestmentSignal
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/council", tags=["AI Council"])
+router = APIRouter(tags=["AI Council"])
 
 
 # ============ Pydantic Models ============

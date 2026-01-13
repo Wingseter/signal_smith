@@ -606,6 +606,46 @@ export const councilWebSocket = {
   },
 };
 
+// News Monitor API
+export const newsMonitorApi = {
+  getStatus: async () => {
+    const response = await api.get('/news-monitor/status');
+    return response.data;
+  },
+  getCrawledNews: async (limit: number = 20) => {
+    const response = await api.get('/news-monitor/crawled', { params: { limit } });
+    return response.data;
+  },
+  getAnalysisHistory: async (limit: number = 20) => {
+    const response = await api.get('/news-monitor/analysis', { params: { limit } });
+    return response.data;
+  },
+  testCrawl: async () => {
+    const response = await api.post('/news-monitor/test-crawl');
+    return response.data;
+  },
+  testAnalyze: async (title: string, symbol?: string) => {
+    const response = await api.post('/news-monitor/test-analyze', null, {
+      params: { title, symbol },
+    });
+    return response.data;
+  },
+};
+
+// News Monitor WebSocket
+export const newsMonitorWebSocket = {
+  connect: () => {
+    const wsUrl = API_BASE_URL.replace('http', 'ws');
+    return new WebSocket(`${wsUrl}/api/v1/news-monitor/ws`);
+  },
+  ping: (ws: WebSocket) => {
+    ws.send(JSON.stringify({ type: 'ping' }));
+  },
+  getStatus: (ws: WebSocket) => {
+    ws.send(JSON.stringify({ type: 'get_status' }));
+  },
+};
+
 // Reports API
 export const reportsApi = {
   getTypes: async () => {

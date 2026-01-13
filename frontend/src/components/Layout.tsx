@@ -5,6 +5,7 @@ import clsx from 'clsx';
 const navItems = [
   { path: '/', label: 'Dashboard', icon: '📊' },
   { path: '/council', label: 'AI Council', icon: '🏛️' },
+  { path: '/news-monitor', label: 'News Monitor', icon: '📰' },
   { path: '/analysis', label: 'Analysis', icon: '🔍' },
   { path: '/signals', label: 'Signals', icon: '📡' },
   { path: '/stocks', label: 'Stocks', icon: '📈' },

@@ -107,18 +107,33 @@ class NewsMonitor:
 
                 soup = BeautifulSoup(response.text, "html.parser")
 
-                # 뉴스 목록 파싱
+                # 뉴스 목록 파싱 - 네이버 금융 HTML 구조:
+                # <li class="block1">
+                #   <dl>
+                #     <dt class="thumb"><a href="..."><img></a></dt>
+                #     <dd class="articleSubject"><a href="...">제목</a></dd>
+                #     <dd class="articleSummary">
+                #       요약...
+                #       <span class="press">출처</span>
+                #       <span class="wdate">2026-01-13 22:01:14</span>
+                #     </dd>
+                #   </dl>
+                # </li>
                 news_items = soup.select("ul.newsList li")
 
                 for item in news_items:
                     try:
-                        # 제목과 링크
-                        title_elem = item.select_one("a")
-                        if not title_elem:
+                        # 제목과 링크 - articleSubject 내의 a 태그에서 추출
+                        subject_elem = item.select_one("dd.articleSubject a")
+                        if not subject_elem:
                             continue
 
-                        title = title_elem.get_text(strip=True)
-                        url = title_elem.get("href", "")
+                        title = subject_elem.get_text(strip=True)
+                        url = subject_elem.get("href", "")
+
+                        # 제목이 비어있으면 스킵
+                        if not title:
+                            continue
 
                         if not url.startswith("http"):
                             url = f"https://finance.naver.com{url}"
@@ -127,16 +142,20 @@ class NewsMonitor:
                         source_elem = item.select_one(".press")
                         source = source_elem.get_text(strip=True) if source_elem else "네이버금융"
 
-                        # 시간
+                        # 시간 - "2026-01-13 22:01:14" 형식
                         time_elem = item.select_one(".wdate")
                         published_at = datetime.now()
                         if time_elem:
                             time_text = time_elem.get_text(strip=True)
-                            # "2024.01.13 15:30" 형식 파싱
+                            # "2026-01-13 22:01:14" 형식 파싱
                             try:
-                                published_at = datetime.strptime(time_text, "%Y.%m.%d %H:%M")
+                                published_at = datetime.strptime(time_text, "%Y-%m-%d %H:%M:%S")
                             except ValueError:
-                                pass
+                                # "2024.01.13 15:30" 형식도 지원
+                                try:
+                                    published_at = datetime.strptime(time_text, "%Y.%m.%d %H:%M")
+                                except ValueError:
+                                    pass
 
                         # 종목 추출 (있는 경우)
                         symbol = None
