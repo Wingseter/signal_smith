@@ -34,11 +34,12 @@ interface SignalStats {
 }
 
 interface AccountBalance {
-  total_balance: number;
-  available_balance: number;
-  invested_amount: number;
-  profit_loss: number;
-  profit_loss_percent: number;
+  total_deposit: number;
+  available_amount: number;
+  total_purchase: number;
+  total_evaluation: number;
+  total_profit_loss: number;
+  profit_rate: number;
 }
 
 interface ExecuteModalProps {
@@ -53,7 +54,7 @@ function ExecuteModal({ signal, balance, onClose, onExecute, isLoading }: Execut
   const [quantity, setQuantity] = useState(1);
   const entryPrice = signal.entry_price || signal.target_price || 0;
   const totalAmount = quantity * entryPrice;
-  const maxQuantity = balance ? Math.floor(balance.available_balance / entryPrice) : 0;
+  const maxQuantity = balance ? Math.floor((balance.available_amount ?? 0) / entryPrice) : 0;
 
   const riskAmount = signal.stop_loss
     ? quantity * Math.abs(entryPrice - signal.stop_loss)
@@ -193,7 +194,7 @@ function ExecuteModal({ signal, balance, onClose, onExecute, isLoading }: Execut
           {/* Balance Info */}
           {balance && (
             <div className="text-sm text-gray-500">
-              사용 가능 잔고: {balance.available_balance.toLocaleString()}원
+              사용 가능 잔고: {(balance.available_amount ?? 0).toLocaleString()}원
             </div>
           )}
         </div>
@@ -209,7 +210,7 @@ function ExecuteModal({ signal, balance, onClose, onExecute, isLoading }: Execut
           </button>
           <button
             onClick={() => onExecute(signal.id, quantity)}
-            disabled={isLoading || totalAmount > (balance?.available_balance || 0)}
+            disabled={isLoading || totalAmount > (balance?.available_amount ?? 0)}
             className={`px-6 py-2 text-white rounded-lg font-medium ${
               signal.signal_type === 'buy'
                 ? 'bg-green-600 hover:bg-green-700 disabled:bg-green-300'
@@ -408,23 +409,23 @@ export default function TradingSignals() {
         <div className="bg-gradient-to-r from-primary-600 to-primary-800 rounded-lg shadow-lg p-6 text-white">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
             <div>
-              <p className="text-primary-200 text-sm">총 자산</p>
-              <p className="text-2xl font-bold">{accountBalance.total_balance.toLocaleString()}원</p>
+              <p className="text-primary-200 text-sm">예수금</p>
+              <p className="text-2xl font-bold">{(accountBalance.total_deposit ?? 0).toLocaleString()}원</p>
             </div>
             <div>
-              <p className="text-primary-200 text-sm">사용 가능</p>
-              <p className="text-2xl font-bold">{accountBalance.available_balance.toLocaleString()}원</p>
+              <p className="text-primary-200 text-sm">주문가능</p>
+              <p className="text-2xl font-bold">{(accountBalance.available_amount ?? 0).toLocaleString()}원</p>
             </div>
             <div>
-              <p className="text-primary-200 text-sm">투자 금액</p>
-              <p className="text-2xl font-bold">{accountBalance.invested_amount.toLocaleString()}원</p>
+              <p className="text-primary-200 text-sm">매입금액</p>
+              <p className="text-2xl font-bold">{(accountBalance.total_purchase ?? 0).toLocaleString()}원</p>
             </div>
             <div>
-              <p className="text-primary-200 text-sm">평가 손익</p>
-              <p className={`text-2xl font-bold ${accountBalance.profit_loss >= 0 ? 'text-green-300' : 'text-red-300'}`}>
-                {accountBalance.profit_loss >= 0 ? '+' : ''}{accountBalance.profit_loss.toLocaleString()}원
+              <p className="text-primary-200 text-sm">평가손익</p>
+              <p className={`text-2xl font-bold ${(accountBalance.total_profit_loss ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                {(accountBalance.total_profit_loss ?? 0) >= 0 ? '+' : ''}{(accountBalance.total_profit_loss ?? 0).toLocaleString()}원
                 <span className="text-sm ml-1">
-                  ({accountBalance.profit_loss_percent >= 0 ? '+' : ''}{accountBalance.profit_loss_percent.toFixed(2)}%)
+                  ({(accountBalance.profit_rate ?? 0) >= 0 ? '+' : ''}{(accountBalance.profit_rate ?? 0).toFixed(2)}%)
                 </span>
               </p>
             </div>

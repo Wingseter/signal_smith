@@ -52,6 +52,7 @@ class KiwoomRestClient(KiwoomBaseClient):
         self.app_key = settings.kiwoom_app_key
         self.secret_key = settings.kiwoom_secret_key
         self.account_number = settings.kiwoom_account_number
+        self.account_password = settings.kiwoom_account_password
 
         self._access_token: Optional[str] = None
         self._token_expires_at: Optional[datetime] = None
@@ -386,6 +387,7 @@ class KiwoomRestClient(KiwoomBaseClient):
                 data={
                     "trnm": tr_name,
                     "acnt": self.account_number,
+                    "acnt_pwd": self.account_password,
                     "stk_cd": symbol,
                     "ord_qty": str(quantity),
                     "ord_prc": str(price) if price > 0 else "0",
@@ -437,6 +439,7 @@ class KiwoomRestClient(KiwoomBaseClient):
                 data={
                     "trnm": "kt10003",
                     "acnt": self.account_number,
+                    "acnt_pwd": self.account_password,
                     "org_ord_no": order_no,
                     "stk_cd": symbol,
                     "cncl_qty": str(quantity),
@@ -487,6 +490,7 @@ class KiwoomRestClient(KiwoomBaseClient):
                 data={
                     "trnm": "kt10002",
                     "acnt": self.account_number,
+                    "acnt_pwd": self.account_password,
                     "org_ord_no": order_no,
                     "stk_cd": symbol,
                     "mdfy_qty": str(quantity),
@@ -526,73 +530,190 @@ class KiwoomRestClient(KiwoomBaseClient):
     # ========== 계좌 ==========
 
     async def get_balance(self) -> Balance:
-        """계좌 잔고 조회 (kt00001 - 예수금상세현황요청)"""
+        """
+        계좌 잔고 조회
+
+        kt00001 (예수금상세현황요청): 예수금, 주문가능금액 등
+        ka01690 (일별잔고수익률): 매입금액, 평가금액, 평가손익, 수익률 (실전투자만 지원)
+        """
+        # 문자열을 정수로 변환하는 헬퍼 함수
+        def parse_int(val) -> int:
+            if val is None:
+                return 0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                # 부호 처리
+                if cleaned.startswith("-"):
+                    return -int(cleaned[1:])
+                elif cleaned.startswith("+"):
+                    return int(cleaned[1:])
+                return int(cleaned) if cleaned else 0
+            except (ValueError, TypeError):
+                return 0
+
+        def parse_float(val) -> float:
+            if val is None:
+                return 0.0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                return float(cleaned) if cleaned else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        total_deposit = 0
+        available_amount = 0
+        total_purchase = 0
+        total_evaluation = 0
+        total_profit_loss = 0
+        profit_rate = 0.0
+
+        # 1. kt00001 - 예수금상세현황요청 (예수금, 주문가능금액)
         try:
             result = await self._request(
                 "POST",
                 "/api/dostk/acnt",
                 data={
                     "trnm": "kt00001",
-                    "acnt": self.account_number,
+                    "qry_tp": "2",  # 조회구분: 2-일반조회, 3-추정조회
                 },
                 api_id="kt00001"
             )
 
-            if result.get("return_code") != 0:
-                raise Exception(result.get("return_msg", "잔고 조회 실패"))
+            logger.debug(f"kt00001 응답: {result}")
 
-            data = result.get("data", {})
-
-            return Balance(
-                total_deposit=int(data.get("tot_dps_amt", 0)),
-                available_amount=int(data.get("ord_psbl_amt", 0)),
-                total_purchase=int(data.get("pchs_amt", 0)),
-                total_evaluation=int(data.get("evlu_amt", 0)),
-                total_profit_loss=int(data.get("evlu_pfls", 0)),
-                profit_rate=float(data.get("evlu_pfls_rt", 0)),
-            )
+            if result.get("return_code") == 0:
+                # kt00001 응답 필드명
+                # entr: 예수금
+                # ord_alow_amt: 주문가능금액
+                total_deposit = parse_int(result.get("entr"))
+                available_amount = parse_int(result.get("ord_alow_amt"))
+                logger.info(f"kt00001 - 예수금: {total_deposit}, 주문가능: {available_amount}")
+            else:
+                logger.warning(f"kt00001 조회 실패: {result.get('return_msg')}")
 
         except Exception as e:
-            logger.error(f"잔고 조회 실패: {str(e)}")
-            return Balance(
-                total_deposit=0,
-                available_amount=0,
-                total_purchase=0,
-                total_evaluation=0,
-                total_profit_loss=0,
-                profit_rate=0.0,
-            )
+            logger.error(f"kt00001 조회 오류: {str(e)}")
 
-    async def get_holdings(self) -> List[Holding]:
-        """보유 종목 조회 (kt00017 - 계좌평가잔고내역요청)"""
+        # 2. kt00018 - 계좌평가잔고내역요청 (매입금액, 평가금액, 수익률)
+        # 모의투자도 지원함
         try:
             result = await self._request(
                 "POST",
                 "/api/dostk/acnt",
                 data={
-                    "trnm": "kt00017",
-                    "acnt": self.account_number,
+                    "trnm": "kt00018",
+                    "qry_tp": "1",  # 1:합산, 2:개별
+                    "dmst_stex_tp": "KRX",  # KRX:한국거래소
                 },
-                api_id="kt00017"
+                api_id="kt00018"
             )
 
+            logger.debug(f"kt00018 응답 (잔고조회): {result}")
+
+            if result.get("return_code") == 0:
+                # kt00018 응답 필드명
+                # tot_pur_amt: 총매입금액
+                # tot_evlt_amt: 총평가금액
+                # tot_evlt_pl: 총평가손익금액
+                # tot_prft_rt: 총수익률(%)
+                total_purchase = parse_int(result.get("tot_pur_amt"))
+                total_evaluation = parse_int(result.get("tot_evlt_amt"))
+                total_profit_loss = parse_int(result.get("tot_evlt_pl"))
+                profit_rate = parse_float(result.get("tot_prft_rt"))
+
+                logger.info(f"kt00018 - 매입: {total_purchase}, 평가: {total_evaluation}, 손익: {total_profit_loss}, 수익률: {profit_rate}%")
+            else:
+                logger.warning(f"kt00018 조회 실패: {result.get('return_msg')}")
+
+        except Exception as e:
+            logger.error(f"kt00018 조회 오류: {str(e)}")
+
+        return Balance(
+            total_deposit=total_deposit,
+            available_amount=available_amount,
+            total_purchase=total_purchase,
+            total_evaluation=total_evaluation,
+            total_profit_loss=total_profit_loss,
+            profit_rate=profit_rate,
+        )
+
+    async def get_holdings(self) -> List[Holding]:
+        """
+        보유 종목 조회 (kt00018 - 계좌평가잔고내역요청)
+
+        응답 필드:
+        - acnt_evlt_remn_indv_tot: 계좌평가잔고개별합산 (LIST)
+          - stk_cd: 종목번호
+          - stk_nm: 종목명
+          - rmnd_qty: 보유수량
+          - pur_pric: 매입가
+          - cur_prc: 현재가
+          - evlt_amt: 평가금액
+          - evltv_prft: 평가손익
+          - prft_rt: 수익률(%)
+        """
+        def parse_int(val) -> int:
+            if val is None:
+                return 0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                if cleaned.startswith("-"):
+                    return -int(cleaned[1:])
+                elif cleaned.startswith("+"):
+                    return int(cleaned[1:])
+                return int(cleaned) if cleaned else 0
+            except (ValueError, TypeError):
+                return 0
+
+        def parse_float(val) -> float:
+            if val is None:
+                return 0.0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                return float(cleaned) if cleaned else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        try:
+            result = await self._request(
+                "POST",
+                "/api/dostk/acnt",
+                data={
+                    "trnm": "kt00018",
+                    "qry_tp": "1",  # 1:합산, 2:개별
+                    "dmst_stex_tp": "KRX",  # KRX:한국거래소, NXT:넥스트트레이드
+                },
+                api_id="kt00018"
+            )
+
+            logger.debug(f"kt00018 응답: {result}")
+
             if result.get("return_code") != 0:
+                logger.warning(f"kt00018 조회 실패: {result.get('return_msg')}")
                 return []
 
             holdings = []
-            for item in result.get("data", {}).get("holdings", []):
-                qty = int(item.get("hldg_qty", 0))
+            # acnt_evlt_remn_indv_tot: 계좌평가잔고개별합산 리스트
+            items = result.get("acnt_evlt_remn_indv_tot", [])
+
+            for item in items:
+                qty = parse_int(item.get("rmnd_qty"))
                 if qty > 0:
+                    # 종목코드에서 'A' 접두어 제거 (예: A005930 -> 005930)
+                    stk_cd = str(item.get("stk_cd", "")).replace("A", "")
+
                     holdings.append(Holding(
-                        symbol=item.get("stk_cd", ""),
+                        symbol=stk_cd,
                         name=item.get("stk_nm", ""),
                         quantity=qty,
-                        avg_price=int(item.get("pchs_avg_prc", 0)),
-                        current_price=int(item.get("cur_prc", 0)),
-                        evaluation=int(item.get("evlu_amt", 0)),
-                        profit_loss=int(item.get("evlu_pfls", 0)),
-                        profit_rate=float(item.get("evlu_pfls_rt", 0)),
+                        avg_price=parse_int(item.get("pur_pric")),
+                        current_price=parse_int(item.get("cur_prc")),
+                        evaluation=parse_int(item.get("evlt_amt")),
+                        profit_loss=parse_int(item.get("evltv_prft")),
+                        profit_rate=parse_float(item.get("prft_rt")),
                     ))
+
+            logger.info(f"kt00018 - 보유종목 {len(holdings)}개 조회")
             return holdings
 
         except Exception as e:
@@ -617,6 +738,7 @@ class KiwoomRestClient(KiwoomBaseClient):
                 data={
                     "trnm": "kt00005",
                     "acnt": self.account_number,
+                    "acnt_pwd": self.account_password,
                     "strt_dt": start_date,
                     "end_dt": end_date,
                 },

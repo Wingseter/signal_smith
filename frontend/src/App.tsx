@@ -16,6 +16,7 @@ import PerformanceDashboard from './components/Performance/PerformanceDashboard'
 import PortfolioOptimizer from './components/Optimizer/PortfolioOptimizer';
 import SectorAnalysis from './components/Sectors/SectorAnalysis';
 import ReportGenerator from './components/Reports/ReportGenerator';
+import AICouncil from './components/Council/AICouncil';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -40,6 +41,7 @@ function App() {
         <Route path="portfolio" element={<Portfolio />} />
         <Route path="trading" element={<Trading />} />
         <Route path="signals" element={<TradingSignals />} />
+        <Route path="council" element={<AICouncil />} />
         <Route path="agents" element={<AgentMonitor />} />
         <Route path="analysis" element={<AnalysisPanel />} />
         <Route path="backtest" element={<Backtest />} />

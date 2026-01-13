@@ -34,11 +34,12 @@ interface MarketData {
 }
 
 interface AccountBalance {
-  total_balance: number;
-  available_balance: number;
-  invested_amount: number;
-  profit_loss: number;
-  profit_loss_percent: number;
+  total_deposit: number;
+  available_amount: number;
+  total_purchase: number;
+  total_evaluation: number;
+  total_profit_loss: number;
+  profit_rate: number;
 }
 
 interface SignalStats {
@@ -145,27 +146,27 @@ export default function Dashboard() {
         <div className="bg-gradient-to-r from-primary-600 to-primary-800 rounded-xl shadow-lg p-6 text-white">
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div>
-              <p className="text-primary-200 text-sm">총 자산</p>
-              <p className="text-2xl font-bold">{accountBalance.total_balance.toLocaleString()}원</p>
+              <p className="text-primary-200 text-sm">예수금</p>
+              <p className="text-2xl font-bold">{(accountBalance.total_deposit ?? 0).toLocaleString()}원</p>
             </div>
             <div>
-              <p className="text-primary-200 text-sm">가용 금액</p>
-              <p className="text-2xl font-bold">{accountBalance.available_balance.toLocaleString()}원</p>
+              <p className="text-primary-200 text-sm">주문가능</p>
+              <p className="text-2xl font-bold">{(accountBalance.available_amount ?? 0).toLocaleString()}원</p>
             </div>
             <div>
-              <p className="text-primary-200 text-sm">투자 금액</p>
-              <p className="text-2xl font-bold">{accountBalance.invested_amount.toLocaleString()}원</p>
+              <p className="text-primary-200 text-sm">매입금액</p>
+              <p className="text-2xl font-bold">{(accountBalance.total_purchase ?? 0).toLocaleString()}원</p>
             </div>
             <div>
-              <p className="text-primary-200 text-sm">평가 손익</p>
-              <p className={`text-2xl font-bold ${accountBalance.profit_loss >= 0 ? 'text-green-300' : 'text-red-300'}`}>
-                {accountBalance.profit_loss >= 0 ? '+' : ''}{accountBalance.profit_loss.toLocaleString()}원
+              <p className="text-primary-200 text-sm">평가손익</p>
+              <p className={`text-2xl font-bold ${(accountBalance.total_profit_loss ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                {(accountBalance.total_profit_loss ?? 0) >= 0 ? '+' : ''}{(accountBalance.total_profit_loss ?? 0).toLocaleString()}원
               </p>
             </div>
             <div>
               <p className="text-primary-200 text-sm">수익률</p>
-              <p className={`text-2xl font-bold ${accountBalance.profit_loss_percent >= 0 ? 'text-green-300' : 'text-red-300'}`}>
-                {accountBalance.profit_loss_percent >= 0 ? '+' : ''}{accountBalance.profit_loss_percent.toFixed(2)}%
+              <p className={`text-2xl font-bold ${(accountBalance.profit_rate ?? 0) >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                {(accountBalance.profit_rate ?? 0) >= 0 ? '+' : ''}{(accountBalance.profit_rate ?? 0).toFixed(2)}%
               </p>
             </div>
           </div>
