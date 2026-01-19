@@ -590,6 +590,35 @@ export const councilApi = {
     const response = await api.post('/council/meetings/manual', data);
     return response.data;
   },
+  getTradingStatus: async () => {
+    const response = await api.get('/council/trading-status');
+    return response.data;
+  },
+  getCostStats: async () => {
+    const response = await api.get('/council/cost-stats');
+    return response.data;
+  },
+  getQueuedExecutions: async () => {
+    const response = await api.get('/council/queued-executions');
+    return response.data;
+  },
+  processQueue: async () => {
+    const response = await api.post('/council/process-queue');
+    return response.data;
+  },
+  // 테스트 API
+  testAnalyzeNews: async () => {
+    const response = await api.post('/council/test/analyze-news');
+    return response.data;
+  },
+  testForceCouncil: async () => {
+    const response = await api.post('/council/test/force-council');
+    return response.data;
+  },
+  testMockCouncil: async (symbol: string = '005930', companyName: string = '삼성전자') => {
+    const response = await api.post(`/council/test/mock-council?symbol=${symbol}&company_name=${encodeURIComponent(companyName)}`);
+    return response.data;
+  },
 };
 
 // Council WebSocket (uses different path than other websockets)

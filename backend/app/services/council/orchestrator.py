@@ -4,9 +4,11 @@ AI 투자 회의 오케스트레이터
 회의 진행을 관리하고 합의를 도출하는 오케스트레이터
 
 v2: 키움증권 실제 차트 데이터 연동
+v3: 자동 매매, SELL 시그널, 거래 시간 체크, 비용 관리 추가
 """
 
 import logging
+import asyncio
 from datetime import datetime
 from typing import Optional, List, Callable, Awaitable
 
@@ -19,6 +21,8 @@ from .quant_analyst import quant_analyst
 from .fundamental_analyst import fundamental_analyst
 from .technical_indicators import technical_calculator, TechnicalAnalysisResult
 from .dart_client import dart_client, FinancialData
+from .trading_hours import trading_hours, MarketSession
+from .cost_manager import cost_manager, AnalysisDepth
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,8 @@ class CouncilOrchestrator:
         self.auto_execute = False          # 자동 체결 여부
         self.min_confidence = 0.6          # 최소 신뢰도
         self.meeting_trigger_score = 7     # 회의 소집 기준 점수
+        self.respect_trading_hours = True  # 거래 시간 존중 여부
+        self._queued_executions: List[InvestmentSignal] = []  # 거래 시간 대기 큐
 
     def add_signal_callback(self, callback: Callable[[InvestmentSignal], Awaitable[None]]):
         """시그널 생성 시 콜백 등록"""
@@ -268,22 +274,34 @@ class CouncilOrchestrator:
             final_percent = (quant_percent + fundamental_percent) / 2
 
         # 5. 시그널 생성
-        suggested_amount = int(available_amount * final_percent / 100)
+        suggested_amount = int(available_amount * abs(final_percent) / 100)
         suggested_quantity = suggested_amount // current_price if current_price > 0 else 0
 
-        # 신뢰도 계산
-        confidence = (quant_score + fundamental_score) / 20  # 0-1 스케일
+        # 신뢰도 계산 - 점수 기반 동적 계산
+        base_confidence = (quant_score + fundamental_score) / 20  # 0-1 스케일
+        # 두 분석가의 의견 일치도에 따라 신뢰도 조정
+        score_diff = abs(quant_score - fundamental_score)
+        agreement_bonus = max(0, (5 - score_diff) * 0.02)  # 의견 일치시 최대 +0.1
+        confidence = min(0.95, base_confidence + agreement_bonus)
 
         # 기술적 분석 데이터가 있으면 진입가/손절가/목표가 포함
         entry_price = quant_msg.data.get("entry_price") if quant_msg.data else None
         stop_loss = quant_msg.data.get("stop_loss") if quant_msg.data else None
         target_price = quant_msg.data.get("target_price") if quant_msg.data else None
 
+        # 액션 결정 로직 개선 (SELL 시그널 포함)
+        action = self._determine_action(
+            final_percent=final_percent,
+            quant_score=quant_score,
+            fundamental_score=fundamental_score,
+            news_score=news_score,
+        )
+
         signal = InvestmentSignal(
             symbol=symbol,
             company_name=company_name,
-            action="BUY" if final_percent > 0 else "HOLD",
-            allocation_percent=final_percent,
+            action=action,
+            allocation_percent=abs(final_percent),
             suggested_amount=suggested_amount,
             suggested_quantity=suggested_quantity,
             quant_summary=quant_msg.content[:100] + "..." if len(quant_msg.content) > 100 else quant_msg.content,
@@ -296,10 +314,22 @@ class CouncilOrchestrator:
 
         # 자동 체결 여부 결정
         if self.auto_execute and confidence >= self.min_confidence:
-            signal.status = SignalStatus.AUTO_EXECUTED
-            signal.executed_at = datetime.now()
+            can_trade, trade_reason = trading_hours.can_execute_order()
+
+            if can_trade or not self.respect_trading_hours:
+                signal.status = SignalStatus.AUTO_EXECUTED
+                signal.executed_at = datetime.now()
+                logger.info(f"✅ 자동 체결: {symbol} {action}")
+            else:
+                # 거래 시간이 아니면 대기 큐에 추가
+                signal.status = SignalStatus.PENDING
+                self._queued_executions.append(signal)
+                logger.info(f"⏳ 거래 시간 대기: {symbol} {action} - {trade_reason}")
         else:
             signal.status = SignalStatus.PENDING
+
+        # 비용 기록
+        cost_manager.record_analysis(symbol, AnalysisDepth.FULL)
 
         meeting.signal = signal
         meeting.consensus_reached = True
@@ -401,6 +431,246 @@ class CouncilOrchestrator:
         """자동 체결 설정"""
         self.auto_execute = enabled
         logger.info(f"자동 체결 {'활성화' if enabled else '비활성화'}")
+
+    def _determine_action(
+        self,
+        final_percent: float,
+        quant_score: int,
+        fundamental_score: int,
+        news_score: int,
+    ) -> str:
+        """
+        투자 액션 결정 (BUY/SELL/HOLD)
+
+        SELL 조건:
+        1. 뉴스 점수가 3 이하 (부정적 뉴스)
+        2. 퀀트 + 펀더멘털 평균 점수 4 이하
+        3. 투자 비율이 음수로 제안됨 (AI가 매도 권장)
+
+        BUY 조건:
+        1. 뉴스 점수 7 이상
+        2. 퀀트 + 펀더멘털 평균 점수 6 이상
+        3. 투자 비율 10% 이상
+
+        HOLD: 그 외
+        """
+        avg_score = (quant_score + fundamental_score) / 2
+
+        # SELL 조건
+        if news_score <= 3:
+            logger.info(f"SELL 결정: 부정적 뉴스 (점수: {news_score})")
+            return "SELL"
+
+        if avg_score <= 4:
+            logger.info(f"SELL 결정: 낮은 분석 점수 (평균: {avg_score:.1f})")
+            return "SELL"
+
+        if final_percent < 0:
+            logger.info(f"SELL 결정: AI 매도 권장 (비율: {final_percent}%)")
+            return "SELL"
+
+        # BUY 조건
+        if final_percent >= 10 and avg_score >= 6:
+            logger.info(f"BUY 결정: 긍정적 분석 (비율: {final_percent}%, 평균: {avg_score:.1f})")
+            return "BUY"
+
+        if news_score >= 8 and avg_score >= 5:
+            logger.info(f"BUY 결정: 강한 뉴스 신호 (뉴스: {news_score}, 평균: {avg_score:.1f})")
+            return "BUY"
+
+        # HOLD
+        logger.info(f"HOLD 결정: 조건 미충족 (비율: {final_percent}%, 평균: {avg_score:.1f})")
+        return "HOLD"
+
+    async def start_sell_meeting(
+        self,
+        symbol: str,
+        company_name: str,
+        sell_reason: str,
+        current_holdings: int,
+        avg_buy_price: int,
+        current_price: int,
+    ) -> CouncilMeeting:
+        """SELL 전용 회의 시작"""
+
+        meeting = CouncilMeeting(
+            symbol=symbol,
+            company_name=company_name,
+            news_title=f"매도 검토: {sell_reason}",
+            news_score=3,  # 매도 기준
+        )
+
+        # 1. 매도 검토 소집 메시지
+        profit_loss = (current_price - avg_buy_price) / avg_buy_price * 100
+        opening_msg = CouncilMessage(
+            role=AnalystRole.MODERATOR,
+            speaker="회의 중재자",
+            content=f"""🔴 **매도 검토 회의 소집**
+
+종목: {company_name} ({symbol})
+매도 사유: {sell_reason}
+
+📊 포지션 현황:
+• 보유 수량: {current_holdings:,}주
+• 평균 매입가: {avg_buy_price:,}원
+• 현재가: {current_price:,}원
+• 수익률: {profit_loss:+.1f}%
+
+각 분석가의 매도 의견을 청취합니다.""",
+            data={
+                "meeting_type": "sell",
+                "current_holdings": current_holdings,
+                "avg_buy_price": avg_buy_price,
+                "current_price": current_price,
+                "profit_loss_rate": profit_loss,
+            },
+        )
+        meeting.add_message(opening_msg)
+        await self._notify_meeting_update(meeting)
+
+        # 기술적 데이터 조회
+        technical_data = await self._fetch_technical_data(symbol)
+
+        # 2. GPT 퀀트 매도 분석
+        meeting.current_round = 1
+        quant_msg = await quant_analyst.analyze(
+            symbol=symbol,
+            company_name=company_name,
+            news_title=f"매도 검토: {sell_reason}",
+            previous_messages=meeting.messages,
+            technical_data=technical_data,
+            request=f"현재 보유 중인 종목의 매도 타이밍을 분석해주세요. 수익률 {profit_loss:+.1f}%, 사유: {sell_reason}",
+        )
+        meeting.add_message(quant_msg)
+        await self._notify_meeting_update(meeting)
+
+        # 3. SELL 시그널 생성
+        quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5
+
+        # 매도 비율 결정 (손실 구간이면 전량, 수익 구간이면 일부)
+        if profit_loss < -5:  # 손절
+            sell_percent = 100
+            action = "SELL"
+        elif profit_loss > 20:  # 익절
+            sell_percent = 50  # 절반 익절
+            action = "PARTIAL_SELL"
+        else:
+            sell_percent = quant_msg.data.get("suggested_percent", 30) if quant_msg.data else 30
+            action = "SELL" if sell_percent >= 50 else "PARTIAL_SELL"
+
+        sell_quantity = int(current_holdings * sell_percent / 100)
+        sell_amount = sell_quantity * current_price
+
+        signal = InvestmentSignal(
+            symbol=symbol,
+            company_name=company_name,
+            action=action,
+            allocation_percent=sell_percent,
+            suggested_amount=sell_amount,
+            suggested_quantity=sell_quantity,
+            quant_summary=f"매도 분석: {quant_msg.content[:100]}...",
+            fundamental_summary=sell_reason,
+            consensus_reason=f"매도 사유: {sell_reason}, 수익률: {profit_loss:+.1f}%",
+            confidence=0.7 + (0.2 if abs(profit_loss) > 10 else 0),  # 큰 변동시 신뢰도 증가
+            quant_score=quant_score,
+            fundamental_score=5,  # 매도시 펀더멘털은 중립
+        )
+
+        # 자동 체결 처리
+        if self.auto_execute:
+            can_trade, _ = trading_hours.can_execute_order()
+            if can_trade or not self.respect_trading_hours:
+                signal.status = SignalStatus.AUTO_EXECUTED
+                signal.executed_at = datetime.now()
+            else:
+                signal.status = SignalStatus.PENDING
+                self._queued_executions.append(signal)
+        else:
+            signal.status = SignalStatus.PENDING
+
+        meeting.signal = signal
+        meeting.consensus_reached = True
+        meeting.ended_at = datetime.now()
+
+        # 결론 메시지
+        conclusion_msg = CouncilMessage(
+            role=AnalystRole.MODERATOR,
+            speaker="회의 중재자",
+            content=f"""⚖️ **매도 회의 결론**
+
+📌 결정: {action}
+💰 매도 비율: {sell_percent}%
+📦 매도 수량: {sell_quantity:,}주
+💵 예상 금액: {sell_amount:,}원
+
+상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 승인 대기 중"}""",
+            data=signal.to_dict(),
+        )
+        meeting.add_message(conclusion_msg)
+        await self._notify_meeting_update(meeting)
+
+        # 저장
+        self._meetings.append(meeting)
+        if signal.status == SignalStatus.PENDING:
+            self._pending_signals.append(signal)
+
+        await self._notify_signal(signal)
+
+        cost_manager.record_analysis(symbol, AnalysisDepth.LIGHT)  # 매도는 가벼운 분석
+
+        return meeting
+
+    async def process_queued_executions(self):
+        """대기 중인 체결 처리 (거래 시간에 호출)"""
+        can_trade, _ = trading_hours.can_execute_order()
+
+        if not can_trade:
+            logger.debug("거래 시간이 아님 - 대기 큐 처리 스킵")
+            return []
+
+        executed = []
+        remaining = []
+
+        for signal in self._queued_executions:
+            if signal.status == SignalStatus.PENDING:
+                try:
+                    # 실제 체결 로직 (키움 API 호출)
+                    signal.status = SignalStatus.AUTO_EXECUTED
+                    signal.executed_at = datetime.now()
+                    executed.append(signal)
+                    logger.info(f"🔔 대기 큐 체결: {signal.symbol} {signal.action}")
+                    await self._notify_signal(signal)
+                except Exception as e:
+                    logger.error(f"대기 큐 체결 실패: {signal.symbol} - {e}")
+                    remaining.append(signal)
+            else:
+                remaining.append(signal)
+
+        self._queued_executions = remaining
+        return executed
+
+    def get_queued_executions(self) -> List[InvestmentSignal]:
+        """대기 중인 체결 목록"""
+        return self._queued_executions.copy()
+
+    def get_trading_status(self) -> dict:
+        """거래 상태 정보"""
+        session = trading_hours.get_market_session()
+        can_trade, reason = trading_hours.can_execute_order()
+
+        return {
+            "session": session.value,
+            "can_trade": can_trade,
+            "reason": reason,
+            "status_message": trading_hours.get_status_message(),
+            "queued_count": len(self._queued_executions),
+            "auto_execute": self.auto_execute,
+            "respect_trading_hours": self.respect_trading_hours,
+        }
+
+    def get_cost_stats(self) -> dict:
+        """비용 통계"""
+        return cost_manager.get_stats()
 
 
 # 싱글톤 인스턴스

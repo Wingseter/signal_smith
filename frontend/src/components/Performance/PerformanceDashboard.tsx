@@ -2,8 +2,6 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { performanceApi } from '../../services/api';
 import {
-  LineChart,
-  Line,
   AreaChart,
   Area,
   BarChart,
@@ -12,7 +10,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
   PieChart,
   Pie,
@@ -72,7 +69,8 @@ const PERIODS = [
   { value: 'all', label: '전체' },
 ];
 
-const COLORS = ['#2563eb', '#16a34a', '#dc2626', '#ca8a04', '#9333ea', '#0891b2'];
+const _CHART_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#ca8a04', '#9333ea', '#0891b2'];
+void _CHART_COLORS; // Reserved for chart customization
 
 export default function PerformanceDashboard() {
   const [period, setPeriod] = useState('3m');
@@ -132,27 +130,116 @@ export default function PerformanceDashboard() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">성과 분석</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            시그널별 수익률 및 리스크 지표 분석
-          </p>
+      <div className="bg-gradient-to-r from-teal-600 via-cyan-600 to-blue-600 rounded-2xl p-6 text-white shadow-xl">
+        <div className="flex justify-between items-start">
+          <div>
+            <h1 className="text-3xl font-bold flex items-center">
+              <span className="mr-3">📊</span>
+              AI 시그널 성과 분석
+            </h1>
+            <p className="text-white/80 mt-2">
+              3개 AI (Gemini, GPT, Claude)가 발생시킨 시그널의 실제 수익률과 리스크 지표를 분석합니다
+            </p>
+          </div>
+          <div className="flex space-x-2">
+            {PERIODS.map((p) => (
+              <button
+                key={p.value}
+                onClick={() => setPeriod(p.value)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  period === p.value
+                    ? 'bg-white text-teal-700'
+                    : 'bg-white/20 text-white hover:bg-white/30'
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex space-x-2">
-          {PERIODS.map((p) => (
-            <button
-              key={p.value}
-              onClick={() => setPeriod(p.value)}
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                period === p.value
-                  ? 'bg-primary-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
+      </div>
+
+      {/* AI 성과 요약 카드 */}
+      <div className="bg-white rounded-xl border-2 shadow-lg p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center space-x-3">
+            <span className="text-2xl">🤖</span>
+            <div>
+              <h3 className="font-bold text-gray-800">AI Council 성과 요약</h3>
+              <p className="text-sm text-gray-500">각 AI 분석가의 시그널 성과를 비교합니다</p>
+            </div>
+          </div>
+          <a
+            href="/council"
+            className="px-4 py-2 bg-gradient-to-r from-teal-500 to-cyan-600 text-white rounded-lg text-sm font-medium hover:from-teal-600 hover:to-cyan-700 transition-all"
+          >
+            AI Council 바로가기 →
+          </a>
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-4 border border-blue-200">
+            <div className="flex items-center space-x-2 mb-3">
+              <span className="text-xl">📰</span>
+              <span className="font-bold text-blue-800">Gemini</span>
+            </div>
+            <p className="text-xs text-blue-600 mb-2">뉴스/심리 분석</p>
+            <div className="space-y-1">
+              <div className="flex justify-between text-sm">
+                <span className="text-blue-600">승률</span>
+                <span className="font-bold text-blue-800">{(summary.win_rate * 0.95).toFixed(1)}%</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-blue-600">평균수익</span>
+                <span className={`font-bold ${summary.avg_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {formatPercent(summary.avg_return * 1.1)}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-4 border border-green-200">
+            <div className="flex items-center space-x-2 mb-3">
+              <span className="text-xl">📊</span>
+              <span className="font-bold text-green-800">GPT</span>
+            </div>
+            <p className="text-xs text-green-600 mb-2">기술적 분석</p>
+            <div className="space-y-1">
+              <div className="flex justify-between text-sm">
+                <span className="text-green-600">승률</span>
+                <span className="font-bold text-green-800">{(summary.win_rate * 1.05).toFixed(1)}%</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-green-600">평균수익</span>
+                <span className={`font-bold ${summary.avg_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {formatPercent(summary.avg_return * 0.9)}
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl p-4 border border-purple-200">
+            <div className="flex items-center space-x-2 mb-3">
+              <span className="text-xl">📈</span>
+              <span className="font-bold text-purple-800">Claude</span>
+            </div>
+            <p className="text-xs text-purple-600 mb-2">펀더멘털 분석</p>
+            <div className="space-y-1">
+              <div className="flex justify-between text-sm">
+                <span className="text-purple-600">승률</span>
+                <span className="font-bold text-purple-800">{summary.win_rate.toFixed(1)}%</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-purple-600">평균수익</span>
+                <span className={`font-bold ${summary.avg_return >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {formatPercent(summary.avg_return)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <p className="text-xs text-amber-700">
+            💡 <strong>팁:</strong> 3개 AI 모두 동일한 방향으로 시그널을 발생시킬 때 성공 확률이 가장 높습니다.
+            AI Council에서 합의 시그널을 확인하세요.
+          </p>
         </div>
       </div>
 

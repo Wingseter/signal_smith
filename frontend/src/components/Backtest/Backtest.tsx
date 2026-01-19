@@ -2,13 +2,10 @@ import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { backtestApi } from '../../services/api';
 import {
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
   AreaChart,
   Area,
@@ -211,37 +208,79 @@ export default function Backtest() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">백테스팅</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            과거 데이터로 전략의 성과를 검증하세요
-          </p>
+      <div className="bg-gradient-to-r from-indigo-600 via-violet-600 to-purple-600 rounded-2xl p-6 text-white shadow-xl">
+        <div className="flex justify-between items-start">
+          <div>
+            <h1 className="text-3xl font-bold flex items-center">
+              <span className="mr-3">🧪</span>
+              AI 전략 백테스팅
+            </h1>
+            <p className="text-white/80 mt-2">
+              AI Council 추천 전략을 과거 데이터로 검증하고 최적의 매매 타이밍을 찾으세요
+            </p>
+          </div>
+          {/* Tabs */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setActiveTab('run')}
+              className={clsx(
+                'px-4 py-2 rounded-lg font-medium transition-colors',
+                activeTab === 'run'
+                  ? 'bg-white text-indigo-700'
+                  : 'bg-white/20 text-white hover:bg-white/30'
+              )}
+            >
+              백테스트 실행
+            </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className={clsx(
+                'px-4 py-2 rounded-lg font-medium transition-colors',
+                activeTab === 'history'
+                  ? 'bg-white text-indigo-700'
+                  : 'bg-white/20 text-white hover:bg-white/30'
+              )}
+            >
+              히스토리
+            </button>
+          </div>
         </div>
-        {/* Tabs */}
-        <div className="flex gap-2">
-          <button
-            onClick={() => setActiveTab('run')}
-            className={clsx(
-              'px-4 py-2 rounded-lg font-medium transition-colors',
-              activeTab === 'run'
-                ? 'bg-primary-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            )}
+      </div>
+
+      {/* AI 전략 가이드 */}
+      <div className="bg-white rounded-xl border-2 shadow-lg p-5">
+        <div className="flex items-start space-x-4">
+          <span className="text-3xl">🤖</span>
+          <div className="flex-1">
+            <h3 className="font-bold text-gray-800">AI 전략 백테스트 가이드</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              3개의 AI (Gemini, GPT, Claude)가 추천한 매매 전략을 과거 데이터로 검증합니다.
+              실제 투자 전 백테스트로 전략의 유효성을 확인하세요.
+            </p>
+            <div className="grid grid-cols-3 gap-4 mt-4">
+              <div className="bg-blue-50 rounded-lg p-3 text-center">
+                <span className="text-xl">📰</span>
+                <p className="text-xs font-medium text-blue-700 mt-1">Gemini 전략</p>
+                <p className="text-xs text-blue-600">뉴스/심리 기반</p>
+              </div>
+              <div className="bg-green-50 rounded-lg p-3 text-center">
+                <span className="text-xl">📊</span>
+                <p className="text-xs font-medium text-green-700 mt-1">GPT 전략</p>
+                <p className="text-xs text-green-600">기술적 분석 기반</p>
+              </div>
+              <div className="bg-purple-50 rounded-lg p-3 text-center">
+                <span className="text-xl">📈</span>
+                <p className="text-xs font-medium text-purple-700 mt-1">Claude 전략</p>
+                <p className="text-xs text-purple-600">펀더멘털 기반</p>
+              </div>
+            </div>
+          </div>
+          <a
+            href="/council"
+            className="px-4 py-2 bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-lg text-sm font-medium hover:from-violet-600 hover:to-purple-700 transition-all"
           >
-            백테스트 실행
-          </button>
-          <button
-            onClick={() => setActiveTab('history')}
-            className={clsx(
-              'px-4 py-2 rounded-lg font-medium transition-colors',
-              activeTab === 'history'
-                ? 'bg-primary-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            )}
-          >
-            히스토리
-          </button>
+            AI Council →
+          </a>
         </div>
       </div>
 

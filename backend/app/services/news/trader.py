@@ -22,14 +22,15 @@ logger = logging.getLogger(__name__)
 class TradingConfig:
     """자동매매 설정"""
     enabled: bool = False                    # 자동매매 활성화
-    council_threshold: int = 7               # AI 회의 소집 기준 점수 (이상)
-    sell_threshold: int = 3                  # 매도 기준 점수 (이하)
+    council_threshold: int = 6               # AI 회의 소집 기준 점수 (이상) - 6점 이상이면 회의 소집
+    sell_threshold: int = 4                  # 매도 기준 점수 (이하) - 4점 이하면 매도 신호
     max_position_per_stock: int = 500000     # 종목당 최대 투자금
     max_daily_trades: int = 10               # 일일 최대 거래 횟수
     cooldown_minutes: int = 30               # 같은 종목 재매매 대기 시간
-    require_symbol: bool = True              # 종목코드 필수 여부
-    min_confidence: float = 0.7              # 최소 신뢰도
+    require_symbol: bool = True              # 종목코드 필수 (True: 종목코드 없으면 회의 안 함)
+    min_confidence: float = 0.6              # 최소 신뢰도
     auto_execute: bool = False               # 자동 체결 (False면 승인 필요)
+    analyze_all_news: bool = True            # 모든 뉴스 분석 (트리거 키워드 무시)
 
 
 @dataclass
@@ -108,34 +109,41 @@ class NewsTrader:
         """뉴스 감지 시 콜백"""
         logger.info(f"뉴스 감지: {article.title}")
 
-        # 종목코드 필수 체크
-        if self.config.require_symbol and not article.symbol:
-            logger.debug(f"종목코드 없음, 스킵: {article.title}")
-            return
-
-        # Gemini로 초기 분석
+        # Gemini로 초기 분석 (먼저 분석해서 종목코드도 추출)
         analysis = await news_analyzer.analyze(article)
 
         logger.info(
             f"Gemini 분석: {article.title[:30]}... -> "
-            f"점수={analysis.score}, 신뢰도={analysis.confidence}"
+            f"점수={analysis.score}, 신뢰도={analysis.confidence:.2f}, "
+            f"종목={analysis.article.symbol}"
         )
+
+        # 분석 결과에서 종목코드 업데이트 (Gemini가 추출한 경우)
+        if not article.symbol and analysis.article.symbol:
+            article.symbol = analysis.article.symbol
+            article.company_name = analysis.article.company_name
+
+        # 종목코드 필수 체크 (분석 후)
+        # 종목코드가 없으면 차트/재무 데이터 조회가 불가능하므로 의미있는 분석 불가
+        if not article.symbol:
+            logger.info(f"⚠️ 종목코드 없음, 회의 스킵: {article.title[:40]}...")
+            return
 
         # 신뢰도 체크
         if analysis.confidence < self.config.min_confidence:
-            logger.debug(f"신뢰도 부족 ({analysis.confidence}), 스킵")
+            logger.info(f"⚠️ 신뢰도 부족 ({analysis.confidence:.2f} < {self.config.min_confidence}), 스킵: {article.title[:30]}...")
             return
 
         symbol = article.symbol
-        company_name = article.company_name or symbol
+        company_name = article.company_name or analysis.article.company_name or symbol
 
-        # 거래 가능 여부 확인
+        # 거래 가능 여부 확인 (쿨다운, 일일 한도 등)
         can_trade, reason = self._can_trade(symbol)
         if not can_trade:
-            logger.info(f"거래 불가: {symbol} - {reason}")
+            logger.info(f"⚠️ 거래 불가: {symbol} - {reason}")
             return
 
-        # 점수가 높으면 AI 회의 소집
+        # 점수가 높으면 AI 회의 소집 (BUY 검토)
         if analysis.score >= self.config.council_threshold:
             logger.info(f"🔔 AI 회의 소집: {company_name} (점수: {analysis.score})")
 

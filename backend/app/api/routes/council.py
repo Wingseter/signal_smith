@@ -5,10 +5,8 @@ AI 투자 회의 API
 시그널 승인/거부/체결을 처리합니다.
 """
 
-import asyncio
 import json
 import logging
-from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Query
@@ -110,6 +108,9 @@ council_orchestrator.add_signal_callback(on_signal_created)
 async def get_status():
     """시스템 상태 조회"""
     stats = news_trader.get_stats()
+    trading_status = council_orchestrator.get_trading_status()
+    cost_stats = council_orchestrator.get_cost_stats()
+
     return {
         "running": stats["running"],
         "auto_execute": stats["auto_execute"],
@@ -118,6 +119,8 @@ async def get_status():
         "total_meetings": stats["total_meetings"],
         "daily_trades": stats["daily_trades"],
         "monitor_running": news_monitor.is_running(),
+        "trading": trading_status,
+        "cost": cost_stats,
     }
 
 
@@ -247,6 +250,141 @@ async def start_manual_meeting(request: ManualMeetingRequest):
     return meeting.to_dict()
 
 
+@router.post("/test/analyze-news")
+async def test_analyze_news():
+    """뉴스 크롤링 및 분석 테스트 (디버그용)"""
+    from app.services.news import news_analyzer
+
+    # 1. 뉴스 크롤링
+    articles = await news_monitor.fetch_main_news()
+
+    if not articles:
+        return {"error": "뉴스를 가져올 수 없습니다", "articles": []}
+
+    # 2. 첫 번째 뉴스 분석
+    article = articles[0]
+    analysis = await news_analyzer.analyze(article)
+
+    # 3. 회의 소집 조건 확인
+    threshold = news_trader.config.council_threshold
+    should_trigger = analysis.score >= threshold
+
+    return {
+        "total_news": len(articles),
+        "analyzed_article": {
+            "title": article.title,
+            "source": article.source,
+            "symbol": article.symbol,
+            "company_name": article.company_name,
+        },
+        "analysis_result": {
+            "score": analysis.score,
+            "sentiment": analysis.sentiment.value,
+            "confidence": analysis.confidence,
+            "trading_signal": analysis.trading_signal,
+            "reason": analysis.analysis_reason,
+            "extracted_symbol": analysis.article.symbol,
+            "extracted_company": analysis.article.company_name,
+        },
+        "council_threshold": threshold,
+        "should_trigger_council": should_trigger,
+        "config": {
+            "require_symbol": news_trader.config.require_symbol,
+            "min_confidence": news_trader.config.min_confidence,
+            "analyze_all_news": news_trader.config.analyze_all_news,
+        }
+    }
+
+
+@router.post("/test/force-council")
+async def test_force_council():
+    """강제로 회의 소집 테스트 (종목코드가 있는 뉴스만)"""
+    from app.services.news import news_analyzer
+
+    # 1. 뉴스 크롤링
+    articles = await news_monitor.fetch_main_news()
+
+    if not articles:
+        return {"error": "뉴스를 가져올 수 없습니다", "articles": []}
+
+    # 2. 종목코드가 있는 뉴스 찾기 (최대 5개 분석)
+    for i, article in enumerate(articles[:5]):
+        analysis = await news_analyzer.analyze(article)
+
+        # 분석 결과에서 종목 정보 업데이트
+        if analysis.article.symbol:
+            article.symbol = analysis.article.symbol
+        if analysis.article.company_name:
+            article.company_name = analysis.article.company_name
+
+        # 종목코드가 있으면 회의 소집
+        if article.symbol:
+            meeting = await council_orchestrator.start_meeting(
+                symbol=article.symbol,
+                company_name=article.company_name or article.title[:20],
+                news_title=article.title,
+                news_score=analysis.score,
+                available_amount=news_trader.config.max_position_per_stock,
+            )
+
+            return {
+                "status": "council_started",
+                "articles_checked": i + 1,
+                "article": {
+                    "title": article.title,
+                    "symbol": article.symbol,
+                    "company_name": article.company_name,
+                },
+                "analysis": {
+                    "score": analysis.score,
+                    "confidence": analysis.confidence,
+                    "signal": analysis.trading_signal,
+                },
+                "meeting": meeting.to_dict(),
+            }
+
+    # 3. 종목코드 있는 뉴스 없음
+    return {
+        "error": "종목코드가 있는 뉴스를 찾을 수 없습니다. 회의 소집 불가.",
+        "articles_checked": min(5, len(articles)),
+        "hint": "뉴스에서 상장사가 언급되어야 회의가 의미있습니다.",
+    }
+
+
+@router.post("/test/mock-council")
+async def test_mock_council(symbol: str = "005930", company_name: str = "삼성전자"):
+    """알려진 종목으로 회의 소집 테스트 (디버그용)
+
+    기본값: 삼성전자 (005930)
+    예시: POST /council/test/mock-council?symbol=035420&company_name=네이버
+    """
+    # 유효한 6자리 종목코드 확인
+    if not symbol or len(symbol) != 6 or not symbol.isdigit():
+        raise HTTPException(
+            status_code=400,
+            detail=f"유효하지 않은 종목코드: {symbol}. 6자리 숫자여야 합니다."
+        )
+
+    meeting = await council_orchestrator.start_meeting(
+        symbol=symbol,
+        company_name=company_name,
+        news_title=f"[테스트] {company_name} 관련 뉴스",
+        news_score=8,  # 높은 점수로 설정
+        available_amount=news_trader.config.max_position_per_stock,
+    )
+
+    return {
+        "status": "council_started",
+        "test_mode": True,
+        "article": {
+            "title": f"[테스트] {company_name} 관련 뉴스",
+            "symbol": symbol,
+            "company_name": company_name,
+        },
+        "meeting": meeting.to_dict(),
+    }
+
+
 @router.put("/config")
 async def update_config(config: CouncilConfig):
     """설정 업데이트"""
@@ -257,6 +395,45 @@ async def update_config(config: CouncilConfig):
         max_position_per_stock=config.max_position_per_stock,
     )
     return {"status": "updated", "config": news_trader.get_stats()}
+
+
+@router.get("/trading-status")
+async def get_trading_status():
+    """거래 상태 조회 (거래 시간, 대기 큐 등)"""
+    return council_orchestrator.get_trading_status()
+
+
+@router.get("/cost-stats")
+async def get_cost_stats():
+    """AI 비용 통계 조회"""
+    return council_orchestrator.get_cost_stats()
+
+
+@router.get("/queued-executions")
+async def get_queued_executions():
+    """거래 시간 대기 중인 시그널 목록"""
+    signals = council_orchestrator.get_queued_executions()
+    return {
+        "signals": [s.to_dict() for s in signals],
+        "total": len(signals),
+    }
+
+
+@router.post("/process-queue")
+async def process_queued_executions():
+    """대기 큐 수동 처리 (거래 시간에만 작동)"""
+    executed = await council_orchestrator.process_queued_executions()
+
+    for signal in executed:
+        await manager.broadcast({
+            "type": "signal_executed",
+            "signal": signal.to_dict(),
+        })
+
+    return {
+        "executed": len(executed),
+        "signals": [s.to_dict() for s in executed],
+    }
 
 
 # ============ WebSocket ============

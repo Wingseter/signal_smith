@@ -10,7 +10,6 @@ import {
   Tooltip,
   ResponsiveContainer,
   Cell,
-  Treemap,
 } from 'recharts';
 
 interface SectorPerformance {
@@ -110,12 +109,13 @@ export default function SectorAnalysis() {
   const formatPercent = (num: number) => `${num >= 0 ? '+' : ''}${num.toFixed(2)}%`;
   const getReturnColor = (num: number) => (num >= 0 ? 'text-green-600' : 'text-red-600');
 
-  // Prepare heatmap data
-  const heatmapData = sectorsData?.map((s) => ({
+  // Prepare heatmap data - reserved for future treemap visualization
+  const _heatmapData = sectorsData?.map((s) => ({
     name: s.name,
     size: Math.abs(s.return_1m) + 10,
     value: s.return_1m,
   })) || [];
+  void _heatmapData;
 
   return (
     <div className="space-y-6">

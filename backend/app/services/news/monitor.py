@@ -35,6 +35,7 @@ class NewsMonitor:
         self._callbacks: List[Callable[[NewsArticle], Awaitable[None]]] = []
         self._poll_interval = 60  # 폴링 간격 (초)
         self._max_seen_urls = 1000  # 최대 저장 URL 수
+        self._analyze_all = True  # 모든 뉴스 분석 (트리거 키워드 무시)
 
     def add_callback(self, callback: Callable[[NewsArticle], Awaitable[None]]):
         """뉴스 감지 시 호출될 콜백 등록"""
@@ -280,9 +281,9 @@ class NewsMonitor:
 
                     self._seen_urls.add(article.url)
 
-                    # 트리거 키워드가 포함된 뉴스만 콜백
-                    if self._is_trigger_news(article.title):
-                        logger.info(f"트리거 뉴스 감지: {article.title}")
+                    # 모든 뉴스 분석 모드이거나, 트리거 키워드가 포함된 뉴스만 콜백
+                    if self._analyze_all or self._is_trigger_news(article.title):
+                        logger.info(f"뉴스 분석 대상: {article.title[:50]}...")
                         await self._notify_callbacks(article)
 
                 # URL 캐시 정리

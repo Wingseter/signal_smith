@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { reportsApi, stocksApi, portfolioApi } from '../../services/api';
 import clsx from 'clsx';
 
