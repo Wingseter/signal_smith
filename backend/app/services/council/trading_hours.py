@@ -5,15 +5,25 @@
 - 정규장: 09:00 - 15:30
 - 시간외 단일가: 15:40 - 16:00, 18:00 - 18:30, 08:30 - 09:00
 - 휴일: 토/일, 공휴일
+
+주의: 모든 시간 계산은 한국 시간(KST, UTC+9) 기준입니다.
 """
 
 import logging
-from datetime import datetime, time, date
+from datetime import datetime, time, date, timedelta, timezone
 from typing import Tuple, Optional
 from enum import Enum
 import asyncio
 
 logger = logging.getLogger(__name__)
+
+# 한국 시간대 (KST = UTC+9)
+KST = timezone(timedelta(hours=9))
+
+
+def get_kst_now() -> datetime:
+    """한국 시간 기준 현재 시간 반환"""
+    return datetime.now(KST)
 
 
 class MarketSession(str, Enum):
@@ -83,25 +93,25 @@ class TradingHoursChecker:
     def is_holiday(self, dt: Optional[datetime] = None) -> bool:
         """공휴일 여부 확인"""
         if dt is None:
-            dt = datetime.now()
+            dt = get_kst_now()
         return dt.date() in self._holidays
 
     def is_weekend(self, dt: Optional[datetime] = None) -> bool:
         """주말 여부 확인"""
         if dt is None:
-            dt = datetime.now()
+            dt = get_kst_now()
         return dt.weekday() >= 5  # 토(5), 일(6)
 
     def is_trading_day(self, dt: Optional[datetime] = None) -> bool:
         """거래일 여부 확인"""
         if dt is None:
-            dt = datetime.now()
+            dt = get_kst_now()
         return not self.is_weekend(dt) and not self.is_holiday(dt)
 
     def get_market_session(self, dt: Optional[datetime] = None) -> MarketSession:
         """현재 시장 세션 확인"""
         if dt is None:
-            dt = datetime.now()
+            dt = get_kst_now()
 
         # 거래일이 아니면 마감
         if not self.is_trading_day(dt):
@@ -130,7 +140,7 @@ class TradingHoursChecker:
     def can_execute_order(self, dt: Optional[datetime] = None) -> Tuple[bool, str]:
         """주문 실행 가능 여부 확인"""
         if dt is None:
-            dt = datetime.now()
+            dt = get_kst_now()
 
         session = self.get_market_session(dt)
 
@@ -149,12 +159,16 @@ class TradingHoursChecker:
             return False, "장 마감 시간입니다"
 
     def get_next_trading_session(self, dt: Optional[datetime] = None) -> Tuple[datetime, MarketSession]:
-        """다음 거래 세션 시작 시간 반환"""
+        """다음 거래 세션 시작 시간 반환 (KST timezone-aware)"""
         if dt is None:
-            dt = datetime.now()
+            dt = get_kst_now()
 
         current_date = dt.date()
         current_time = dt.time()
+
+        def combine_kst(d: date, t: time) -> datetime:
+            """KST timezone-aware datetime 생성"""
+            return datetime.combine(d, t, tzinfo=KST)
 
         # 오늘이 거래일인 경우
         if self.is_trading_day(dt):
@@ -162,11 +176,11 @@ class TradingHoursChecker:
             if current_time < self.REGULAR_OPEN:
                 # 장전 시간 체크
                 if current_time < self.PRE_MARKET_OPEN:
-                    return datetime.combine(current_date, self.PRE_MARKET_OPEN), MarketSession.PRE_MARKET
+                    return combine_kst(current_date, self.PRE_MARKET_OPEN), MarketSession.PRE_MARKET
                 elif current_time < self.PRE_MARKET_CLOSE:
                     return dt, MarketSession.PRE_MARKET  # 현재 장전
                 else:
-                    return datetime.combine(current_date, self.REGULAR_OPEN), MarketSession.REGULAR
+                    return combine_kst(current_date, self.REGULAR_OPEN), MarketSession.REGULAR
 
             # 정규장 시간
             elif current_time < self.REGULAR_CLOSE:
@@ -175,54 +189,68 @@ class TradingHoursChecker:
             # 장후
             elif current_time < self.POST_MARKET_1_CLOSE:
                 if current_time < self.POST_MARKET_1_OPEN:
-                    return datetime.combine(current_date, self.POST_MARKET_1_OPEN), MarketSession.POST_MARKET
+                    return combine_kst(current_date, self.POST_MARKET_1_OPEN), MarketSession.POST_MARKET
                 return dt, MarketSession.POST_MARKET
 
             elif current_time < self.POST_MARKET_2_CLOSE:
                 if current_time < self.POST_MARKET_2_OPEN:
-                    return datetime.combine(current_date, self.POST_MARKET_2_OPEN), MarketSession.POST_MARKET
+                    return combine_kst(current_date, self.POST_MARKET_2_OPEN), MarketSession.POST_MARKET
                 return dt, MarketSession.POST_MARKET
 
         # 다음 거래일 찾기
-        from datetime import timedelta
         next_date = current_date + timedelta(days=1)
-        while not self.is_trading_day(datetime.combine(next_date, time(12, 0))):
+        while not self.is_trading_day(combine_kst(next_date, time(12, 0))):
             next_date += timedelta(days=1)
             if (next_date - current_date).days > 30:  # 안전장치
                 break
 
-        return datetime.combine(next_date, self.PRE_MARKET_OPEN), MarketSession.PRE_MARKET
+        return combine_kst(next_date, self.PRE_MARKET_OPEN), MarketSession.PRE_MARKET
 
     def time_until_market_open(self, dt: Optional[datetime] = None) -> Optional[int]:
         """시장 오픈까지 남은 시간(초) 반환, 이미 열려있으면 None"""
         if dt is None:
-            dt = datetime.now()
+            dt = get_kst_now()
 
         can_trade, _ = self.can_execute_order(dt)
         if can_trade:
             return None
 
         next_session, _ = self.get_next_trading_session(dt)
+        # timezone 일치시키기
+        if next_session.tzinfo is None:
+            next_session = next_session.replace(tzinfo=KST)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=KST)
         delta = next_session - dt
         return int(delta.total_seconds())
 
     def get_status_message(self, dt: Optional[datetime] = None) -> str:
         """현재 거래 상태 메시지"""
         if dt is None:
-            dt = datetime.now()
+            dt = get_kst_now()
 
         session = self.get_market_session(dt)
         can_trade, reason = self.can_execute_order(dt)
 
         if can_trade:
             if session == MarketSession.REGULAR:
-                remaining = datetime.combine(dt.date(), self.REGULAR_CLOSE) - dt
+                # timezone-aware datetime 생성
+                close_dt = datetime.combine(dt.date(), self.REGULAR_CLOSE, tzinfo=KST)
+                # dt가 naive면 aware로 변환
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=KST)
+                remaining = close_dt - dt
                 minutes = int(remaining.total_seconds() // 60)
                 return f"🟢 정규장 진행 중 (마감까지 {minutes}분)"
             else:
                 return f"🟡 {reason}"
         else:
             next_session, next_type = self.get_next_trading_session(dt)
+            # timezone 일치시키기
+            if next_session.tzinfo is None:
+                next_session = next_session.replace(tzinfo=KST)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=KST)
             delta = next_session - dt
             hours = int(delta.total_seconds() // 3600)
             minutes = int((delta.total_seconds() % 3600) // 60)
