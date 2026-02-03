@@ -572,7 +572,19 @@ function SignalCard({
 }
 
 // 개선된 회의 뷰어
-function MeetingViewer({ meeting }: { meeting: CouncilMeeting }) {
+function MeetingViewer({
+  meeting,
+  onApproveSignal,
+  onRejectSignal,
+  onExecuteSignal,
+  isLoading
+}: {
+  meeting: CouncilMeeting;
+  onApproveSignal?: (signalId: string) => void;
+  onRejectSignal?: (signalId: string) => void;
+  onExecuteSignal?: (signalId: string) => void;
+  isLoading?: boolean;
+}) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -688,6 +700,48 @@ function MeetingViewer({ meeting }: { meeting: CouncilMeeting }) {
           <div className="mt-3 bg-white rounded-lg p-3 border">
             <p className="text-sm text-gray-700">{meeting.signal.consensus_reason}</p>
           </div>
+
+          {/* 시그널 액션 버튼 - 회의 뷰어에서도 승인/거부/체결 가능 */}
+          {meeting.signal.status === 'pending' && onApproveSignal && onRejectSignal && (
+            <div className="mt-4 flex space-x-3">
+              <button
+                onClick={() => onApproveSignal(meeting.signal!.id)}
+                disabled={isLoading}
+                className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl text-sm font-bold hover:from-blue-600 hover:to-blue-700 disabled:opacity-50 transition-all shadow-md hover:shadow-lg"
+              >
+                ✅ 승인하기
+              </button>
+              <button
+                onClick={() => onRejectSignal(meeting.signal!.id)}
+                disabled={isLoading}
+                className="flex-1 px-4 py-3 bg-gray-100 text-gray-700 rounded-xl text-sm font-bold hover:bg-gray-200 disabled:opacity-50 transition-all"
+              >
+                ❌ 거부하기
+              </button>
+            </div>
+          )}
+
+          {meeting.signal.status === 'approved' && onExecuteSignal && (
+            <button
+              onClick={() => onExecuteSignal(meeting.signal!.id)}
+              disabled={isLoading}
+              className="mt-4 w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl text-sm font-bold hover:from-green-600 hover:to-emerald-700 disabled:opacity-50 transition-all shadow-md hover:shadow-lg"
+            >
+              💰 지금 체결하기
+            </button>
+          )}
+
+          {(meeting.signal.status === 'executed' || meeting.signal.status === 'auto_executed') && (
+            <div className="mt-4 p-3 bg-green-100 border border-green-300 rounded-xl text-center">
+              <span className="text-green-700 font-bold">✅ 체결 완료</span>
+            </div>
+          )}
+
+          {meeting.signal.status === 'rejected' && (
+            <div className="mt-4 p-3 bg-red-100 border border-red-300 rounded-xl text-center">
+              <span className="text-red-700 font-bold">❌ 거부됨</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1187,26 +1241,26 @@ export default function AICouncil() {
             </button>
           </div>
           {/* 요약 정보 표시 */}
-          {testResult.article && (
+          {'article' in testResult && testResult.article ? (
             <div className="bg-gray-800 rounded-lg p-3 mb-3">
-              <p className="text-white font-medium">{(testResult.article as Record<string, unknown>).title as string}</p>
+              <p className="text-white font-medium">{String((testResult.article as Record<string, unknown>).title)}</p>
               <p className="text-gray-400 text-sm mt-1">
-                종목: {(testResult.article as Record<string, unknown>).company_name as string} ({(testResult.article as Record<string, unknown>).symbol as string})
+                종목: {String((testResult.article as Record<string, unknown>).company_name)} ({String((testResult.article as Record<string, unknown>).symbol)})
               </p>
             </div>
-          )}
-          {testResult.analysis_result && (
+          ) : null}
+          {'analysis_result' in testResult && testResult.analysis_result ? (
             <div className="grid grid-cols-2 gap-2 mb-3">
               <div className="bg-gray-800 rounded-lg p-2 text-center">
                 <p className="text-gray-400 text-xs">점수</p>
-                <p className="text-2xl font-bold text-white">{(testResult.analysis_result as Record<string, unknown>).score as number}/10</p>
+                <p className="text-2xl font-bold text-white">{Number((testResult.analysis_result as Record<string, unknown>).score)}/10</p>
               </div>
               <div className="bg-gray-800 rounded-lg p-2 text-center">
                 <p className="text-gray-400 text-xs">신뢰도</p>
-                <p className="text-2xl font-bold text-white">{Math.round(((testResult.analysis_result as Record<string, unknown>).confidence as number) * 100)}%</p>
+                <p className="text-2xl font-bold text-white">{Math.round(Number((testResult.analysis_result as Record<string, unknown>).confidence) * 100)}%</p>
               </div>
             </div>
-          )}
+          ) : null}
           {testResult.should_trigger_council !== undefined && (
             <div className={`rounded-lg p-3 mb-3 ${testResult.should_trigger_council ? 'bg-green-800' : 'bg-yellow-800'}`}>
               <p className="text-white font-medium">
@@ -1344,7 +1398,13 @@ export default function AICouncil() {
               ✕ 닫기
             </button>
           </div>
-          <MeetingViewer meeting={selectedMeeting} />
+          <MeetingViewer
+            meeting={selectedMeeting}
+            onApproveSignal={(id) => approveMutation.mutate(id)}
+            onRejectSignal={(id) => rejectMutation.mutate(id)}
+            onExecuteSignal={(id) => executeMutation.mutate(id)}
+            isLoading={approveMutation.isPending || rejectMutation.isPending || executeMutation.isPending}
+          />
         </div>
       )}
 
