@@ -24,25 +24,21 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # Korea Investment Securities API
-    kis_app_key: Optional[str] = None
-    kis_app_secret: Optional[str] = None
-    kis_account_number: Optional[str] = None
-    kis_account_product_code: str = "01"
-    kis_base_url: str = "https://openapi.koreainvestment.com:9443"
-    kis_ws_url: str = "ws://ops.koreainvestment.com:21000"
-
-    # Kiwoom Securities API
-    kiwoom_user_id: Optional[str] = None
-    kiwoom_user_password: Optional[str] = None
-    kiwoom_cert_password: Optional[str] = None
+    # Kiwoom Securities REST API
+    kiwoom_app_key: Optional[str] = None
+    kiwoom_secret_key: Optional[str] = None
+    kiwoom_account_number: Optional[str] = None
+    kiwoom_account_password: str = "0000"  # 모의투자 기본 비밀번호
+    kiwoom_base_url: str = "https://mockapi.kiwoom.com"
+    kiwoom_ws_url: str = "wss://mockapi.kiwoom.com:10000"
+    kiwoom_is_mock: bool = True
 
     # DART API
     dart_api_key: Optional[str] = None
 
     # OpenAI
     openai_api_key: Optional[str] = None
-    openai_model: str = "gpt-4-turbo-preview"
+    openai_model: str = "gpt-4o-mini"
 
     # Anthropic
     anthropic_api_key: Optional[str] = None
@@ -54,6 +50,9 @@ class Settings(BaseSettings):
 
     # News API
     news_api_key: Optional[str] = None
+
+    # Tavily API (심층 분석용)
+    tavily_api_key: Optional[str] = None
 
     # Notification
     slack_webhook_url: Optional[str] = None

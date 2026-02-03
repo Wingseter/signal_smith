@@ -22,7 +22,8 @@ const sampleData = [
   { date: '2024-01-12', close: 2655 },
 ];
 
-export default function StockChart({ symbol, data = sampleData }: StockChartProps) {
+export default function StockChart({ symbol: _symbol, data = sampleData }: StockChartProps) {
+  void _symbol; // Symbol is received for API use but chart uses data directly
   return (
     <div className="h-64">
       <ResponsiveContainer width="100%" height="100%">

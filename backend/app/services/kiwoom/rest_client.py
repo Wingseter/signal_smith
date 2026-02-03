@@ -1,19 +1,16 @@
 """
-Kiwoom REST API Client (KOA Studio)
+Kiwoom Securities REST API Client
 
 Cross-platform REST API client for Kiwoom Securities.
 Works on macOS, Linux, and Windows.
 
-API Documentation: https://www.kiwoom.com/h/customer/download/VOpenApiInfoView
+API Documentation: https://openapi.kiwoom.com
 """
 
 import asyncio
-import hashlib
-import hmac
-import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
-import json
+import logging
 
 import httpx
 
@@ -29,30 +26,33 @@ from app.services.kiwoom.base import (
     OrderSide,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class KiwoomRestClient(KiwoomBaseClient):
     """
     키움증권 REST API 클라이언트
 
-    KOA Studio REST API를 사용하여 시세 조회, 주문, 계좌 관리를 수행합니다.
+    키움증권 REST API를 사용하여 시세 조회, 주문, 계좌 관리를 수행합니다.
+    https://openapi.kiwoom.com
     """
 
     # API Endpoints
-    BASE_URL = "https://openapi.koreainvestment.com:9443"  # 실전투자
-    PAPER_URL = "https://openapivts.koreainvestment.com:29443"  # 모의투자
+    BASE_URL = "https://api.kiwoom.com"  # 실전투자
+    MOCK_URL = "https://mockapi.kiwoom.com"  # 모의투자
 
-    def __init__(self, is_paper_trading: bool = True):
+    def __init__(self, is_mock: bool = True):
         """
         Args:
-            is_paper_trading: True면 모의투자, False면 실전투자
+            is_mock: True면 모의투자, False면 실전투자
         """
-        self.is_paper_trading = is_paper_trading
-        self.base_url = self.PAPER_URL if is_paper_trading else self.BASE_URL
+        self.is_mock = is_mock
+        self.base_url = settings.kiwoom_base_url or (self.MOCK_URL if is_mock else self.BASE_URL)
 
-        self.app_key = settings.kis_app_key
-        self.app_secret = settings.kis_app_secret
-        self.account_number = settings.kis_account_number
-        self.account_product_code = settings.kis_account_product_code
+        self.app_key = settings.kiwoom_app_key
+        self.secret_key = settings.kiwoom_secret_key
+        self.account_number = settings.kiwoom_account_number
+        self.account_password = settings.kiwoom_account_password
 
         self._access_token: Optional[str] = None
         self._token_expires_at: Optional[datetime] = None
@@ -60,15 +60,17 @@ class KiwoomRestClient(KiwoomBaseClient):
 
     async def connect(self) -> bool:
         """API 연결 및 토큰 발급"""
-        if not self.app_key or not self.app_secret:
-            raise ValueError("API 키가 설정되지 않았습니다. .env 파일을 확인하세요.")
+        if not self.app_key or not self.secret_key:
+            raise ValueError("API 키가 설정되지 않았습니다. .env 파일의 KIWOOM_APP_KEY, KIWOOM_SECRET_KEY를 확인하세요.")
 
         try:
             await self._get_access_token()
             self._connected = True
+            logger.info("키움증권 API 연결 성공")
             return True
         except Exception as e:
             self._connected = False
+            logger.error(f"키움증권 API 연결 실패: {str(e)}")
             raise ConnectionError(f"API 연결 실패: {str(e)}")
 
     async def disconnect(self) -> None:
@@ -76,6 +78,7 @@ class KiwoomRestClient(KiwoomBaseClient):
         self._access_token = None
         self._token_expires_at = None
         self._connected = False
+        logger.info("키움증권 API 연결 해제")
 
     async def is_connected(self) -> bool:
         """연결 상태 확인"""
@@ -86,10 +89,10 @@ class KiwoomRestClient(KiwoomBaseClient):
         return True
 
     async def _get_access_token(self) -> str:
-        """액세스 토큰 발급/갱신"""
+        """액세스 토큰 발급/갱신 (au10001)"""
         # Redis 캐시 확인
         redis = await get_redis()
-        cache_key = f"kiwoom:token:{'paper' if self.is_paper_trading else 'real'}"
+        cache_key = f"kiwoom:token:{'mock' if self.is_mock else 'real'}"
         cached_token = await redis.get(cache_key)
         if cached_token:
             self._access_token = cached_token
@@ -101,80 +104,177 @@ class KiwoomRestClient(KiwoomBaseClient):
                 return self._access_token
 
         # 새 토큰 발급
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"{self.base_url}/oauth2/tokenP",
+                f"{self.base_url}/oauth2/token",
                 json={
                     "grant_type": "client_credentials",
                     "appkey": self.app_key,
-                    "appsecret": self.app_secret,
+                    "secretkey": self.secret_key,
                 },
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json;charset=UTF-8"},
             )
             response.raise_for_status()
             data = response.json()
 
-            self._access_token = data["access_token"]
-            expires_in = data.get("expires_in", 86400)
-            self._token_expires_at = datetime.now() + timedelta(seconds=expires_in)
+            # 키움증권 응답 형식 확인
+            if data.get("return_code") != 0:
+                raise Exception(f"토큰 발급 실패: {data.get('return_msg', 'Unknown error')}")
 
-            # Redis에 캐시
-            await redis.set(cache_key, self._access_token, ex=expires_in - 300)
+            self._access_token = data["token"]
 
+            # expires_dt 형식 처리 (다양한 형식 지원)
+            expires_dt = data.get("expires_dt") or data.get("token_expired")
+            if expires_dt:
+                expires_dt = str(expires_dt).strip()
+                try:
+                    if len(expires_dt) == 14:  # YYYYMMDDHHMMSS
+                        self._token_expires_at = datetime.strptime(expires_dt, "%Y%m%d%H%M%S")
+                    elif "T" in expires_dt:  # ISO 형식
+                        self._token_expires_at = datetime.fromisoformat(expires_dt.replace("Z", "+00:00"))
+                    elif " " in expires_dt:  # YYYY-MM-DD HH:MM:SS
+                        self._token_expires_at = datetime.strptime(expires_dt, "%Y-%m-%d %H:%M:%S")
+                    else:
+                        self._token_expires_at = datetime.now() + timedelta(hours=24)
+                except ValueError:
+                    self._token_expires_at = datetime.now() + timedelta(hours=24)
+            else:
+                # 기본 24시간
+                self._token_expires_at = datetime.now() + timedelta(hours=24)
+
+            # Redis에 캐시 (만료 5분 전까지)
+            ttl = int((self._token_expires_at - datetime.now()).total_seconds()) - 300
+            if ttl > 0:
+                await redis.set(cache_key, self._access_token, ex=ttl)
+
+            logger.info(f"키움증권 토큰 발급 완료 (만료: {self._token_expires_at})")
             return self._access_token
 
-    def _get_headers(self, tr_id: str) -> Dict[str, str]:
-        """API 요청 헤더 생성"""
-        return {
-            "Content-Type": "application/json; charset=utf-8",
+    def _get_headers(self, api_id: str = None, cont_yn: str = "N", next_key: str = "") -> Dict[str, str]:
+        """
+        API 요청 헤더 생성
+
+        Args:
+            api_id: TR명 (예: ka10001, ka10081, kt10000 등)
+            cont_yn: 연속조회여부 ('N' 또는 'Y')
+            next_key: 연속조회키
+        """
+        headers = {
+            "Content-Type": "application/json;charset=UTF-8",
             "authorization": f"Bearer {self._access_token}",
-            "appkey": self.app_key,
-            "appsecret": self.app_secret,
-            "tr_id": tr_id,
-            "custtype": "P",  # 개인
+            "cont-yn": cont_yn,
+            "next-key": next_key,
         }
+        if api_id:
+            headers["api-id"] = api_id
+        return headers
 
-    # ========== 시세 조회 ==========
-
-    async def get_stock_price(self, symbol: str) -> Optional[StockPrice]:
-        """현재가 조회"""
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        data: Dict[str, Any] = None,
+        api_id: str = None
+    ) -> Dict[str, Any]:
+        """API 요청 공통 메서드"""
         if not await self.is_connected():
             await self.connect()
 
+        url = f"{self.base_url}{endpoint}"
+        headers = self._get_headers(api_id=api_id)
+
+        # 디버그 로깅
+        logger.debug(f"API 요청: {method} {url}")
+        logger.debug(f"Headers: {headers}")
+        logger.debug(f"Data: {data}")
+
+        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+            if method.upper() == "GET":
+                response = await client.get(url, headers=headers, params=data)
+            else:
+                response = await client.post(url, headers=headers, json=data)
+
+            logger.debug(f"Response Status: {response.status_code}")
+            logger.debug(f"Response Body: {response.text[:500] if response.text else 'Empty'}")
+
+            response.raise_for_status()
+            result = response.json()
+
+            # 에러 체크
+            if result.get("return_code") != 0:
+                logger.warning(f"API 요청 실패: {result.get('return_msg')}")
+
+            return result
+
+    # ========== 시세 조회 ==========
+
+    def _parse_signed_int(self, value: str) -> int:
+        """부호가 포함된 문자열을 정수로 변환 (예: '+139000' -> 139000)
+
+        키움 API는 가격 앞에 +/-를 붙여 등락 방향을 표시.
+        가격 자체는 절대값이므로 부호를 제거하여 절대값 반환.
+        """
+        if not value:
+            return 0
+        value = str(value).strip()
+        # 부호 제거 후 절대값 반환
+        return abs(int(value.replace('+', '').replace(',', '')))
+
+    def _parse_signed_change(self, value: str) -> int:
+        """등락폭 문자열을 정수로 변환 (부호 유지)"""
+        if not value:
+            return 0
+        value = str(value).strip().replace(',', '')
+        if value.startswith('+'):
+            return int(value[1:])
+        elif value.startswith('-'):
+            return -int(value[1:])
+        return int(value)
+
+    def _parse_signed_float(self, value: str) -> float:
+        """부호가 포함된 문자열을 실수로 변환 (부호 유지)"""
+        if not value:
+            return 0.0
+        value = str(value).strip().replace(',', '')
+        if value.startswith('+'):
+            return float(value[1:])
+        elif value.startswith('-'):
+            return -float(value[1:])
+        return float(value)
+
+    async def get_stock_price(self, symbol: str) -> Optional[StockPrice]:
+        """현재가 조회 (ka10001 - 주식기본정보요청)"""
         try:
-            async with httpx.AsyncClient() as client:
-                # TR: FHKST01010100 - 주식현재가 시세
-                response = await client.get(
-                    f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-price",
-                    headers=self._get_headers("FHKST01010100"),
-                    params={
-                        "FID_COND_MRKT_DIV_CODE": "J",  # 주식
-                        "FID_INPUT_ISCD": symbol,
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            result = await self._request(
+                "POST",
+                "/api/dostk/stkinfo",
+                data={
+                    "trnm": "ka10001",
+                    "stk_cd": symbol,
+                },
+                api_id="ka10001"
+            )
 
-                if data.get("rt_cd") != "0":
-                    return None
+            if result.get("return_code") != 0:
+                return None
 
-                output = data.get("output", {})
-                return StockPrice(
-                    symbol=symbol,
-                    name=output.get("hts_kor_isnm", ""),
-                    current_price=int(output.get("stck_prpr", 0)),
-                    change=int(output.get("prdy_vrss", 0)),
-                    change_rate=float(output.get("prdy_ctrt", 0)),
-                    open_price=int(output.get("stck_oprc", 0)),
-                    high_price=int(output.get("stck_hgpr", 0)),
-                    low_price=int(output.get("stck_lwpr", 0)),
-                    volume=int(output.get("acml_vol", 0)),
-                    trade_amount=int(output.get("acml_tr_pbmn", 0)),
-                    timestamp=datetime.now(),
-                )
+            # 키움 API는 데이터를 직접 result에 반환 (data 키 없음)
+            return StockPrice(
+                symbol=symbol,
+                name=result.get("stk_nm", ""),
+                current_price=self._parse_signed_int(result.get("cur_prc", "0")),
+                change=self._parse_signed_change(result.get("pred_pre", "0")),
+                change_rate=self._parse_signed_float(result.get("flu_rt", "0")),
+                open_price=self._parse_signed_int(result.get("open_pric", "0")),
+                high_price=self._parse_signed_int(result.get("high_pric", "0")),
+                low_price=self._parse_signed_int(result.get("low_pric", "0")),
+                volume=int(result.get("trde_qty", 0)),
+                trade_amount=int(result.get("trde_amt", 0)) if result.get("trde_amt") else 0,
+                timestamp=datetime.now(),
+            )
 
         except Exception as e:
-            print(f"시세 조회 실패 [{symbol}]: {str(e)}")
+            logger.error(f"시세 조회 실패 [{symbol}]: {str(e)}")
             return None
 
     async def get_stock_prices(self, symbols: List[str]) -> List[StockPrice]:
@@ -189,48 +289,50 @@ class KiwoomRestClient(KiwoomBaseClient):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """일봉 데이터 조회"""
-        if not await self.is_connected():
-            await self.connect()
+        """일봉 데이터 조회 (ka10081 - 주식일봉차트조회요청)
 
+        Args:
+            symbol: 종목코드 (예: 005930)
+            start_date: 시작일 (미사용, 연속조회로 대체)
+            end_date: 기준일자 (YYYYMMDD, 기본값: 오늘)
+
+        Returns:
+            일봉 데이터 리스트 (최신순)
+        """
         if not end_date:
             end_date = datetime.now().strftime("%Y%m%d")
 
         try:
-            async with httpx.AsyncClient() as client:
-                # TR: FHKST01010400 - 주식일봉조회
-                response = await client.get(
-                    f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
-                    headers=self._get_headers("FHKST01010400"),
-                    params={
-                        "FID_COND_MRKT_DIV_CODE": "J",
-                        "FID_INPUT_ISCD": symbol,
-                        "FID_PERIOD_DIV_CODE": "D",  # 일봉
-                        "FID_ORG_ADJ_PRC": "0",  # 수정주가
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            result = await self._request(
+                "POST",
+                "/api/dostk/chart",
+                data={
+                    "stk_cd": symbol,
+                    "base_dt": end_date,
+                    "upd_stkpc_tp": "1",  # 수정주가 적용 (필수 파라미터)
+                },
+                api_id="ka10081"
+            )
 
-                if data.get("rt_cd") != "0":
-                    return []
+            if result.get("return_code") != 0:
+                logger.warning(f"일봉 조회 API 오류 [{symbol}]: {result.get('return_msg')}")
+                return []
 
-                prices = []
-                for item in data.get("output", []):
-                    prices.append({
-                        "date": item.get("stck_bsop_date"),
-                        "open": int(item.get("stck_oprc", 0)),
-                        "high": int(item.get("stck_hgpr", 0)),
-                        "low": int(item.get("stck_lwpr", 0)),
-                        "close": int(item.get("stck_clpr", 0)),
-                        "volume": int(item.get("acml_vol", 0)),
-                        "change": int(item.get("prdy_vrss", 0)),
-                        "change_rate": float(item.get("prdy_ctrt", 0)),
-                    })
-                return prices
+            prices = []
+            # 응답 필드명: stk_dt_pole_chart_qry (주식일봉차트조회)
+            for item in result.get("stk_dt_pole_chart_qry", []):
+                prices.append({
+                    "date": item.get("dt"),
+                    "open": self._parse_signed_int(item.get("open_pric", "0")),
+                    "high": self._parse_signed_int(item.get("high_pric", "0")),
+                    "low": self._parse_signed_int(item.get("low_pric", "0")),
+                    "close": self._parse_signed_int(item.get("cur_prc", "0")),  # 현재가 = 종가
+                    "volume": int(item.get("trde_qty", 0)),
+                })
+            return prices
 
         except Exception as e:
-            print(f"일봉 조회 실패 [{symbol}]: {str(e)}")
+            logger.error(f"일봉 조회 실패 [{symbol}]: {str(e)}")
             return []
 
     async def get_minute_prices(
@@ -238,44 +340,37 @@ class KiwoomRestClient(KiwoomBaseClient):
         symbol: str,
         interval: int = 1,
     ) -> List[Dict[str, Any]]:
-        """분봉 데이터 조회"""
-        if not await self.is_connected():
-            await self.connect()
-
+        """분봉 데이터 조회 (ka10080 - 주식분봉차트조회요청)"""
         try:
-            async with httpx.AsyncClient() as client:
-                # TR: FHKST01010500 - 주식분봉조회
-                response = await client.get(
-                    f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice",
-                    headers=self._get_headers("FHKST01010500"),
-                    params={
-                        "FID_ETC_CLS_CODE": "",
-                        "FID_COND_MRKT_DIV_CODE": "J",
-                        "FID_INPUT_ISCD": symbol,
-                        "FID_INPUT_HOUR_1": "160000",  # 조회시간
-                        "FID_PW_DATA_INCU_YN": "N",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            result = await self._request(
+                "POST",
+                "/api/dostk/chart",
+                data={
+                    "trnm": "ka10080",
+                    "stk_cd": symbol,
+                    "tick_scope": str(interval),  # 분봉 간격
+                    "req_cnt": "100",
+                },
+                api_id="ka10080"
+            )
 
-                if data.get("rt_cd") != "0":
-                    return []
+            if result.get("return_code") != 0:
+                return []
 
-                prices = []
-                for item in data.get("output2", []):
-                    prices.append({
-                        "time": item.get("stck_cntg_hour"),
-                        "open": int(item.get("stck_oprc", 0)),
-                        "high": int(item.get("stck_hgpr", 0)),
-                        "low": int(item.get("stck_lwpr", 0)),
-                        "close": int(item.get("stck_prpr", 0)),
-                        "volume": int(item.get("cntg_vol", 0)),
-                    })
-                return prices
+            prices = []
+            for item in result.get("data", {}).get("chart", []):
+                prices.append({
+                    "time": item.get("dt"),
+                    "open": int(item.get("open_prc", 0)),
+                    "high": int(item.get("high_prc", 0)),
+                    "low": int(item.get("low_prc", 0)),
+                    "close": int(item.get("clos_prc", 0)),
+                    "volume": int(item.get("trde_qty", 0)),
+                })
+            return prices
 
         except Exception as e:
-            print(f"분봉 조회 실패 [{symbol}]: {str(e)}")
+            logger.error(f"분봉 조회 실패 [{symbol}]: {str(e)}")
             return []
 
     # ========== 주문 ==========
@@ -288,49 +383,46 @@ class KiwoomRestClient(KiwoomBaseClient):
         price: int = 0,
         order_type: OrderType = OrderType.LIMIT,
     ) -> OrderResult:
-        """주문 실행"""
-        if not await self.is_connected():
-            await self.connect()
+        """주문 실행 (kt10000/kt10001 - 주식 매수/매도 주문)"""
+        # 매수: kt10000, 매도: kt10001
+        tr_name = "kt10000" if side == OrderSide.BUY else "kt10001"
 
-        # TR ID 결정
-        if self.is_paper_trading:
-            tr_id = "VTTC0802U" if side == OrderSide.BUY else "VTTC0801U"
-        else:
-            tr_id = "TTTC0802U" if side == OrderSide.BUY else "TTTC0801U"
+        # 주문유형: 00-지정가, 03-시장가
+        ord_tp = "00" if order_type == OrderType.LIMIT else "03"
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.base_url}/uapi/domestic-stock/v1/trading/order-cash",
-                    headers=self._get_headers(tr_id),
-                    json={
-                        "CANO": self.account_number,
-                        "ACNT_PRDT_CD": self.account_product_code,
-                        "PDNO": symbol,
-                        "ORD_DVSN": order_type.value,
-                        "ORD_QTY": str(quantity),
-                        "ORD_UNPR": str(price) if price > 0 else "0",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            result = await self._request(
+                "POST",
+                "/api/dostk/order",
+                data={
+                    "trnm": tr_name,
+                    "acnt": self.account_number,
+                    "acnt_pwd": self.account_password,
+                    "stk_cd": symbol,
+                    "ord_qty": str(quantity),
+                    "ord_prc": str(price) if price > 0 else "0",
+                    "ord_tp": ord_tp,
+                },
+                api_id=tr_name
+            )
 
-                success = data.get("rt_cd") == "0"
-                output = data.get("output", {})
+            success = result.get("return_code") == 0
+            data = result.get("data", {})
 
-                return OrderResult(
-                    order_no=output.get("ODNO", "") if success else "",
-                    symbol=symbol,
-                    order_type=order_type.value,
-                    side=side.value,
-                    quantity=quantity,
-                    price=price,
-                    status="submitted" if success else "rejected",
-                    message=data.get("msg1", ""),
-                    timestamp=datetime.now(),
-                )
+            return OrderResult(
+                order_no=data.get("ord_no", "") if success else "",
+                symbol=symbol,
+                order_type=order_type.value,
+                side=side.value,
+                quantity=quantity,
+                price=price,
+                status="submitted" if success else "rejected",
+                message=result.get("return_msg", ""),
+                timestamp=datetime.now(),
+            )
 
         except Exception as e:
+            logger.error(f"주문 실패 [{symbol}]: {str(e)}")
             return OrderResult(
                 order_no="",
                 symbol=symbol,
@@ -349,47 +441,38 @@ class KiwoomRestClient(KiwoomBaseClient):
         symbol: str,
         quantity: int,
     ) -> OrderResult:
-        """주문 취소"""
-        if not await self.is_connected():
-            await self.connect()
-
-        tr_id = "VTTC0803U" if self.is_paper_trading else "TTTC0803U"
-
+        """주문 취소 (kt10003 - 주식 취소주문)"""
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl",
-                    headers=self._get_headers(tr_id),
-                    json={
-                        "CANO": self.account_number,
-                        "ACNT_PRDT_CD": self.account_product_code,
-                        "KRX_FWDG_ORD_ORGNO": "",
-                        "ORGN_ODNO": order_no,
-                        "ORD_DVSN": "00",
-                        "RVSE_CNCL_DVSN_CD": "02",  # 취소
-                        "ORD_QTY": str(quantity),
-                        "ORD_UNPR": "0",
-                        "QTY_ALL_ORD_YN": "Y",  # 전량
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            result = await self._request(
+                "POST",
+                "/api/dostk/order",
+                data={
+                    "trnm": "kt10003",
+                    "acnt": self.account_number,
+                    "acnt_pwd": self.account_password,
+                    "org_ord_no": order_no,
+                    "stk_cd": symbol,
+                    "cncl_qty": str(quantity),
+                },
+                api_id="kt10003"
+            )
 
-                success = data.get("rt_cd") == "0"
+            success = result.get("return_code") == 0
 
-                return OrderResult(
-                    order_no=order_no,
-                    symbol=symbol,
-                    order_type="cancel",
-                    side="",
-                    quantity=quantity,
-                    price=0,
-                    status="cancelled" if success else "failed",
-                    message=data.get("msg1", ""),
-                    timestamp=datetime.now(),
-                )
+            return OrderResult(
+                order_no=order_no,
+                symbol=symbol,
+                order_type="cancel",
+                side="",
+                quantity=quantity,
+                price=0,
+                status="cancelled" if success else "failed",
+                message=result.get("return_msg", ""),
+                timestamp=datetime.now(),
+            )
 
         except Exception as e:
+            logger.error(f"주문 취소 실패 [{order_no}]: {str(e)}")
             return OrderResult(
                 order_no=order_no,
                 symbol=symbol,
@@ -409,47 +492,39 @@ class KiwoomRestClient(KiwoomBaseClient):
         quantity: int,
         price: int,
     ) -> OrderResult:
-        """주문 정정"""
-        if not await self.is_connected():
-            await self.connect()
-
-        tr_id = "VTTC0803U" if self.is_paper_trading else "TTTC0803U"
-
+        """주문 정정 (kt10002 - 주식 정정주문)"""
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl",
-                    headers=self._get_headers(tr_id),
-                    json={
-                        "CANO": self.account_number,
-                        "ACNT_PRDT_CD": self.account_product_code,
-                        "KRX_FWDG_ORD_ORGNO": "",
-                        "ORGN_ODNO": order_no,
-                        "ORD_DVSN": "00",
-                        "RVSE_CNCL_DVSN_CD": "01",  # 정정
-                        "ORD_QTY": str(quantity),
-                        "ORD_UNPR": str(price),
-                        "QTY_ALL_ORD_YN": "N",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            result = await self._request(
+                "POST",
+                "/api/dostk/order",
+                data={
+                    "trnm": "kt10002",
+                    "acnt": self.account_number,
+                    "acnt_pwd": self.account_password,
+                    "org_ord_no": order_no,
+                    "stk_cd": symbol,
+                    "mdfy_qty": str(quantity),
+                    "mdfy_prc": str(price),
+                },
+                api_id="kt10002"
+            )
 
-                success = data.get("rt_cd") == "0"
+            success = result.get("return_code") == 0
 
-                return OrderResult(
-                    order_no=order_no,
-                    symbol=symbol,
-                    order_type="modify",
-                    side="",
-                    quantity=quantity,
-                    price=price,
-                    status="modified" if success else "failed",
-                    message=data.get("msg1", ""),
-                    timestamp=datetime.now(),
-                )
+            return OrderResult(
+                order_no=order_no,
+                symbol=symbol,
+                order_type="modify",
+                side="",
+                quantity=quantity,
+                price=price,
+                status="modified" if success else "failed",
+                message=result.get("return_msg", ""),
+                timestamp=datetime.now(),
+            )
 
         except Exception as e:
+            logger.error(f"주문 정정 실패 [{order_no}]: {str(e)}")
             return OrderResult(
                 order_no=order_no,
                 symbol=symbol,
@@ -465,108 +540,194 @@ class KiwoomRestClient(KiwoomBaseClient):
     # ========== 계좌 ==========
 
     async def get_balance(self) -> Balance:
-        """계좌 잔고 조회"""
-        if not await self.is_connected():
-            await self.connect()
+        """
+        계좌 잔고 조회
 
-        tr_id = "VTTC8434R" if self.is_paper_trading else "TTTC8434R"
+        kt00001 (예수금상세현황요청): 예수금, 주문가능금액 등
+        ka01690 (일별잔고수익률): 매입금액, 평가금액, 평가손익, 수익률 (실전투자만 지원)
+        """
+        # 문자열을 정수로 변환하는 헬퍼 함수
+        def parse_int(val) -> int:
+            if val is None:
+                return 0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                # 부호 처리
+                if cleaned.startswith("-"):
+                    return -int(cleaned[1:])
+                elif cleaned.startswith("+"):
+                    return int(cleaned[1:])
+                return int(cleaned) if cleaned else 0
+            except (ValueError, TypeError):
+                return 0
 
+        def parse_float(val) -> float:
+            if val is None:
+                return 0.0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                return float(cleaned) if cleaned else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        total_deposit = 0
+        available_amount = 0
+        total_purchase = 0
+        total_evaluation = 0
+        total_profit_loss = 0
+        profit_rate = 0.0
+
+        # 1. kt00001 - 예수금상세현황요청 (예수금, 주문가능금액)
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-balance",
-                    headers=self._get_headers(tr_id),
-                    params={
-                        "CANO": self.account_number,
-                        "ACNT_PRDT_CD": self.account_product_code,
-                        "AFHR_FLPR_YN": "N",
-                        "OFL_YN": "",
-                        "INQR_DVSN": "02",
-                        "UNPR_DVSN": "01",
-                        "FUND_STTL_ICLD_YN": "N",
-                        "FNCG_AMT_AUTO_RDPT_YN": "N",
-                        "PRCS_DVSN": "00",
-                        "CTX_AREA_FK100": "",
-                        "CTX_AREA_NK100": "",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-
-                if data.get("rt_cd") != "0":
-                    raise Exception(data.get("msg1", "잔고 조회 실패"))
-
-                output2 = data.get("output2", [{}])[0] if data.get("output2") else {}
-
-                return Balance(
-                    total_deposit=int(output2.get("dnca_tot_amt", 0)),
-                    available_amount=int(output2.get("ord_psbl_cash", 0)),
-                    total_purchase=int(output2.get("pchs_amt_smtl_amt", 0)),
-                    total_evaluation=int(output2.get("evlu_amt_smtl_amt", 0)),
-                    total_profit_loss=int(output2.get("evlu_pfls_smtl_amt", 0)),
-                    profit_rate=float(output2.get("tot_evlu_pfls_rt", 0)),
-                )
-
-        except Exception as e:
-            print(f"잔고 조회 실패: {str(e)}")
-            return Balance(
-                total_deposit=0,
-                available_amount=0,
-                total_purchase=0,
-                total_evaluation=0,
-                total_profit_loss=0,
-                profit_rate=0.0,
+            result = await self._request(
+                "POST",
+                "/api/dostk/acnt",
+                data={
+                    "trnm": "kt00001",
+                    "qry_tp": "2",  # 조회구분: 2-일반조회, 3-추정조회
+                },
+                api_id="kt00001"
             )
 
-    async def get_holdings(self) -> List[Holding]:
-        """보유 종목 조회"""
-        if not await self.is_connected():
-            await self.connect()
+            logger.debug(f"kt00001 응답: {result}")
 
-        tr_id = "VTTC8434R" if self.is_paper_trading else "TTTC8434R"
-
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-balance",
-                    headers=self._get_headers(tr_id),
-                    params={
-                        "CANO": self.account_number,
-                        "ACNT_PRDT_CD": self.account_product_code,
-                        "AFHR_FLPR_YN": "N",
-                        "OFL_YN": "",
-                        "INQR_DVSN": "02",
-                        "UNPR_DVSN": "01",
-                        "FUND_STTL_ICLD_YN": "N",
-                        "FNCG_AMT_AUTO_RDPT_YN": "N",
-                        "PRCS_DVSN": "00",
-                        "CTX_AREA_FK100": "",
-                        "CTX_AREA_NK100": "",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
-
-                if data.get("rt_cd") != "0":
-                    return []
-
-                holdings = []
-                for item in data.get("output1", []):
-                    if int(item.get("hldg_qty", 0)) > 0:
-                        holdings.append(Holding(
-                            symbol=item.get("pdno", ""),
-                            name=item.get("prdt_name", ""),
-                            quantity=int(item.get("hldg_qty", 0)),
-                            avg_price=int(item.get("pchs_avg_pric", 0)),
-                            current_price=int(item.get("prpr", 0)),
-                            evaluation=int(item.get("evlu_amt", 0)),
-                            profit_loss=int(item.get("evlu_pfls_amt", 0)),
-                            profit_rate=float(item.get("evlu_pfls_rt", 0)),
-                        ))
-                return holdings
+            if result.get("return_code") == 0:
+                # kt00001 응답 필드명
+                # entr: 예수금
+                # ord_alow_amt: 주문가능금액
+                total_deposit = parse_int(result.get("entr"))
+                available_amount = parse_int(result.get("ord_alow_amt"))
+                logger.info(f"kt00001 - 예수금: {total_deposit}, 주문가능: {available_amount}")
+            else:
+                logger.warning(f"kt00001 조회 실패: {result.get('return_msg')}")
 
         except Exception as e:
-            print(f"보유종목 조회 실패: {str(e)}")
+            logger.error(f"kt00001 조회 오류: {str(e)}")
+
+        # 2. kt00018 - 계좌평가잔고내역요청 (매입금액, 평가금액, 수익률)
+        # 모의투자도 지원함
+        try:
+            result = await self._request(
+                "POST",
+                "/api/dostk/acnt",
+                data={
+                    "trnm": "kt00018",
+                    "qry_tp": "1",  # 1:합산, 2:개별
+                    "dmst_stex_tp": "KRX",  # KRX:한국거래소
+                },
+                api_id="kt00018"
+            )
+
+            logger.debug(f"kt00018 응답 (잔고조회): {result}")
+
+            if result.get("return_code") == 0:
+                # kt00018 응답 필드명
+                # tot_pur_amt: 총매입금액
+                # tot_evlt_amt: 총평가금액
+                # tot_evlt_pl: 총평가손익금액
+                # tot_prft_rt: 총수익률(%)
+                total_purchase = parse_int(result.get("tot_pur_amt"))
+                total_evaluation = parse_int(result.get("tot_evlt_amt"))
+                total_profit_loss = parse_int(result.get("tot_evlt_pl"))
+                profit_rate = parse_float(result.get("tot_prft_rt"))
+
+                logger.info(f"kt00018 - 매입: {total_purchase}, 평가: {total_evaluation}, 손익: {total_profit_loss}, 수익률: {profit_rate}%")
+            else:
+                logger.warning(f"kt00018 조회 실패: {result.get('return_msg')}")
+
+        except Exception as e:
+            logger.error(f"kt00018 조회 오류: {str(e)}")
+
+        return Balance(
+            total_deposit=total_deposit,
+            available_amount=available_amount,
+            total_purchase=total_purchase,
+            total_evaluation=total_evaluation,
+            total_profit_loss=total_profit_loss,
+            profit_rate=profit_rate,
+        )
+
+    async def get_holdings(self) -> List[Holding]:
+        """
+        보유 종목 조회 (kt00018 - 계좌평가잔고내역요청)
+
+        응답 필드:
+        - acnt_evlt_remn_indv_tot: 계좌평가잔고개별합산 (LIST)
+          - stk_cd: 종목번호
+          - stk_nm: 종목명
+          - rmnd_qty: 보유수량
+          - pur_pric: 매입가
+          - cur_prc: 현재가
+          - evlt_amt: 평가금액
+          - evltv_prft: 평가손익
+          - prft_rt: 수익률(%)
+        """
+        def parse_int(val) -> int:
+            if val is None:
+                return 0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                if cleaned.startswith("-"):
+                    return -int(cleaned[1:])
+                elif cleaned.startswith("+"):
+                    return int(cleaned[1:])
+                return int(cleaned) if cleaned else 0
+            except (ValueError, TypeError):
+                return 0
+
+        def parse_float(val) -> float:
+            if val is None:
+                return 0.0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                return float(cleaned) if cleaned else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        try:
+            result = await self._request(
+                "POST",
+                "/api/dostk/acnt",
+                data={
+                    "trnm": "kt00018",
+                    "qry_tp": "1",  # 1:합산, 2:개별
+                    "dmst_stex_tp": "KRX",  # KRX:한국거래소, NXT:넥스트트레이드
+                },
+                api_id="kt00018"
+            )
+
+            logger.debug(f"kt00018 응답: {result}")
+
+            if result.get("return_code") != 0:
+                logger.warning(f"kt00018 조회 실패: {result.get('return_msg')}")
+                return []
+
+            holdings = []
+            # acnt_evlt_remn_indv_tot: 계좌평가잔고개별합산 리스트
+            items = result.get("acnt_evlt_remn_indv_tot", [])
+
+            for item in items:
+                qty = parse_int(item.get("rmnd_qty"))
+                if qty > 0:
+                    # 종목코드에서 'A' 접두어 제거 (예: A005930 -> 005930)
+                    stk_cd = str(item.get("stk_cd", "")).replace("A", "")
+
+                    holdings.append(Holding(
+                        symbol=stk_cd,
+                        name=item.get("stk_nm", ""),
+                        quantity=qty,
+                        avg_price=parse_int(item.get("pur_pric")),
+                        current_price=parse_int(item.get("cur_prc")),
+                        evaluation=parse_int(item.get("evlt_amt")),
+                        profit_loss=parse_int(item.get("evltv_prft")),
+                        profit_rate=parse_float(item.get("prft_rt")),
+                    ))
+
+            logger.info(f"kt00018 - 보유종목 {len(holdings)}개 조회")
+            return holdings
+
+        except Exception as e:
+            logger.error(f"보유종목 조회 실패: {str(e)}")
             return []
 
     async def get_order_history(
@@ -574,114 +735,143 @@ class KiwoomRestClient(KiwoomBaseClient):
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """주문 내역 조회"""
-        if not await self.is_connected():
-            await self.connect()
-
-        tr_id = "VTTC8001R" if self.is_paper_trading else "TTTC8001R"
-
+        """주문 내역 조회 (kt00005 - 계좌별주문체결내역상세요청)"""
         if not start_date:
             start_date = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
         if not end_date:
             end_date = datetime.now().strftime("%Y%m%d")
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
-                    headers=self._get_headers(tr_id),
-                    params={
-                        "CANO": self.account_number,
-                        "ACNT_PRDT_CD": self.account_product_code,
-                        "INQR_STRT_DT": start_date,
-                        "INQR_END_DT": end_date,
-                        "SLL_BUY_DVSN_CD": "00",  # 전체
-                        "INQR_DVSN": "00",
-                        "PDNO": "",
-                        "CCLD_DVSN": "00",
-                        "ORD_GNO_BRNO": "",
-                        "ODNO": "",
-                        "INQR_DVSN_3": "00",
-                        "INQR_DVSN_1": "",
-                        "CTX_AREA_FK100": "",
-                        "CTX_AREA_NK100": "",
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            result = await self._request(
+                "POST",
+                "/api/dostk/acnt",
+                data={
+                    "trnm": "kt00005",
+                    "acnt": self.account_number,
+                    "acnt_pwd": self.account_password,
+                    "strt_dt": start_date,
+                    "end_dt": end_date,
+                },
+                api_id="kt00005"
+            )
 
-                if data.get("rt_cd") != "0":
-                    return []
+            if result.get("return_code") != 0:
+                return []
 
-                orders = []
-                for item in data.get("output1", []):
-                    orders.append({
-                        "order_date": item.get("ord_dt"),
-                        "order_no": item.get("odno"),
-                        "symbol": item.get("pdno"),
-                        "name": item.get("prdt_name"),
-                        "side": "buy" if item.get("sll_buy_dvsn_cd") == "02" else "sell",
-                        "order_type": item.get("ord_dvsn_name"),
-                        "quantity": int(item.get("ord_qty", 0)),
-                        "price": int(item.get("ord_unpr", 0)),
-                        "filled_quantity": int(item.get("tot_ccld_qty", 0)),
-                        "filled_price": int(item.get("avg_prvs", 0)),
-                        "status": item.get("ord_tmd"),
-                    })
-                return orders
+            orders = []
+            for item in result.get("data", {}).get("orders", []):
+                orders.append({
+                    "order_date": item.get("ord_dt"),
+                    "order_no": item.get("ord_no"),
+                    "symbol": item.get("stk_cd"),
+                    "name": item.get("stk_nm"),
+                    "side": "buy" if item.get("buy_sell_tp") == "1" else "sell",
+                    "order_type": item.get("ord_tp_nm"),
+                    "quantity": int(item.get("ord_qty", 0)),
+                    "price": int(item.get("ord_prc", 0)),
+                    "filled_quantity": int(item.get("ccld_qty", 0)),
+                    "filled_price": int(item.get("ccld_prc", 0)),
+                    "status": item.get("ord_st_nm"),
+                })
+            return orders
 
         except Exception as e:
-            print(f"주문 내역 조회 실패: {str(e)}")
+            logger.error(f"주문 내역 조회 실패: {str(e)}")
             return []
 
     # ========== 종목 정보 ==========
 
     async def get_stock_info(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """종목 기본 정보 조회"""
-        if not await self.is_connected():
-            await self.connect()
-
+        """종목 기본 정보 조회 (ka10100 - 종목정보 조회)"""
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.base_url}/uapi/domestic-stock/v1/quotations/search-stock-info",
-                    headers=self._get_headers("CTPF1002R"),
-                    params={
-                        "PRDT_TYPE_CD": "300",
-                        "PDNO": symbol,
-                    },
-                )
-                response.raise_for_status()
-                data = response.json()
+            result = await self._request(
+                "POST",
+                "/api/dostk/stkinfo",
+                data={
+                    "trnm": "ka10100",
+                    "stk_cd": symbol,
+                },
+                api_id="ka10100"
+            )
 
-                if data.get("rt_cd") != "0":
-                    return None
+            if result.get("return_code") != 0:
+                return None
 
-                output = data.get("output", {})
-                return {
-                    "symbol": symbol,
-                    "name": output.get("prdt_name", ""),
-                    "market": output.get("std_idst_clsf_cd_name", ""),
-                    "sector": output.get("idx_bztp_lcls_cd_name", ""),
-                    "listed_shares": int(output.get("lstg_stqt", 0)),
-                    "capital": int(output.get("cpfn", 0)),
-                }
+            data = result.get("data", {})
+            return {
+                "symbol": symbol,
+                "name": data.get("stk_nm", ""),
+                "market": data.get("mrkt_nm", ""),
+                "sector": data.get("sect_nm", ""),
+                "listed_shares": int(data.get("lstd_stk_cnt", 0)),
+                "capital": int(data.get("cptl", 0)),
+            }
 
         except Exception as e:
-            print(f"종목 정보 조회 실패 [{symbol}]: {str(e)}")
+            logger.error(f"종목 정보 조회 실패 [{symbol}]: {str(e)}")
             return None
 
     async def search_stocks(self, keyword: str) -> List[Dict[str, Any]]:
-        """종목 검색 - REST API에서는 직접 지원하지 않음"""
-        # 로컬 종목 코드 목록에서 검색하거나
-        # 미리 캐싱된 데이터에서 검색하는 방식으로 구현
-        return []
+        """종목 검색 (ka10099 - 종목정보 리스트)"""
+        try:
+            result = await self._request(
+                "POST",
+                "/api/dostk/stkinfo",
+                data={
+                    "trnm": "ka10099",
+                    "srch_txt": keyword,
+                },
+                api_id="ka10099"
+            )
+
+            if result.get("return_code") != 0:
+                return []
+
+            stocks = []
+            for item in result.get("data", {}).get("stocks", []):
+                stocks.append({
+                    "symbol": item.get("stk_cd", ""),
+                    "name": item.get("stk_nm", ""),
+                    "market": item.get("mrkt_nm", ""),
+                })
+            return stocks
+
+        except Exception as e:
+            logger.error(f"종목 검색 실패 [{keyword}]: {str(e)}")
+            return []
 
     async def get_market_stocks(self, market: str = "KOSPI") -> List[Dict[str, Any]]:
-        """시장별 종목 리스트 - REST API에서는 별도 API 필요"""
-        # 한국거래소 API 또는 캐싱된 데이터 사용
-        return []
+        """시장별 종목 리스트 (ka10101 - 업종코드 리스트)"""
+        try:
+            # 시장코드: 0-코스피, 10-코스닥
+            mrkt_cd = "0" if market.upper() == "KOSPI" else "10"
+
+            result = await self._request(
+                "POST",
+                "/api/dostk/stkinfo",
+                data={
+                    "trnm": "ka10101",
+                    "mrkt_cd": mrkt_cd,
+                },
+                api_id="ka10101"
+            )
+
+            if result.get("return_code") != 0:
+                return []
+
+            stocks = []
+            for item in result.get("data", {}).get("stocks", []):
+                stocks.append({
+                    "symbol": item.get("stk_cd", ""),
+                    "name": item.get("stk_nm", ""),
+                    "market": market,
+                })
+            return stocks
+
+        except Exception as e:
+            logger.error(f"시장 종목 조회 실패 [{market}]: {str(e)}")
+            return []
 
 
 # 싱글톤 인스턴스
-kiwoom_client = KiwoomRestClient(is_paper_trading=True)
+kiwoom_client = KiwoomRestClient(is_mock=settings.kiwoom_is_mock)

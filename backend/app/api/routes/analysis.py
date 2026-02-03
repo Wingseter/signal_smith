@@ -396,23 +396,55 @@ async def get_market_sentiment(
     시장 전반 센티먼트 분석
 
     Gemini 에이전트를 활용하여 시장 전반의 분위기를 분석합니다.
+    API 키가 설정되지 않은 경우 기본값을 반환합니다.
     """
-    from app.agents.gemini_agent import GeminiNewsAgent
+    try:
+        from app.agents.gemini_agent import GeminiNewsAgent
+        from app.config import settings
 
-    agent = GeminiNewsAgent()
-    result = await agent.get_market_sentiment(market)
+        # API 키가 없으면 기본값 반환
+        if not settings.google_api_key or settings.google_api_key == "your-google-api-key":
+            return MarketSentimentResponse(
+                market=market,
+                overall_sentiment="neutral",
+                sentiment_score=50,
+                key_drivers=["API 키가 설정되지 않아 분석을 수행할 수 없습니다"],
+                sector_outlook=None,
+                analyzed_at=datetime.utcnow().isoformat(),
+            )
 
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
+        agent = GeminiNewsAgent()
+        result = await agent.get_market_sentiment(market)
 
-    return MarketSentimentResponse(
-        market=result.get("market", market),
-        overall_sentiment=result.get("overall_sentiment", "neutral"),
-        sentiment_score=result.get("sentiment_score", 0),
-        key_drivers=result.get("key_drivers", []),
-        sector_outlook=result.get("sector_outlook"),
-        analyzed_at=result.get("analyzed_at", datetime.utcnow().isoformat()),
-    )
+        if "error" in result:
+            # 에러 발생 시 기본값 반환 (500 에러 대신)
+            return MarketSentimentResponse(
+                market=market,
+                overall_sentiment="neutral",
+                sentiment_score=50,
+                key_drivers=[f"분석 오류: {result.get('error', '알 수 없는 오류')[:100]}"],
+                sector_outlook=None,
+                analyzed_at=datetime.utcnow().isoformat(),
+            )
+
+        return MarketSentimentResponse(
+            market=result.get("market", market),
+            overall_sentiment=result.get("overall_sentiment", "neutral"),
+            sentiment_score=result.get("sentiment_score", 0),
+            key_drivers=result.get("key_drivers", []),
+            sector_outlook=result.get("sector_outlook"),
+            analyzed_at=result.get("analyzed_at", datetime.utcnow().isoformat()),
+        )
+    except Exception as e:
+        # 예외 발생 시에도 기본값 반환
+        return MarketSentimentResponse(
+            market=market,
+            overall_sentiment="neutral",
+            sentiment_score=50,
+            key_drivers=[f"서비스 오류: {str(e)[:100]}"],
+            sector_outlook=None,
+            analyzed_at=datetime.utcnow().isoformat(),
+        )
 
 
 # ========== 에이전트 상태 API ==========

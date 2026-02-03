@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, stocks, portfolio, trading, analysis, notifications, backtest, performance, optimizer, sectors, reports
+from app.api.routes import auth, stocks, portfolio, trading, analysis, notifications, backtest, performance, optimizer, sectors, reports, council, news_monitor
 from app.api.websocket.handler import router as ws_router
 from app.config import settings
 from app.core.database import init_db
@@ -47,6 +47,8 @@ app.include_router(performance.router, prefix="/api/v1/performance", tags=["Perf
 app.include_router(optimizer.router, prefix="/api/v1/optimizer", tags=["Portfolio Optimization"])
 app.include_router(sectors.router, prefix="/api/v1/sectors", tags=["Sector Analysis"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
+app.include_router(council.router, prefix="/api/v1/council", tags=["AI Council"])
+app.include_router(news_monitor.router, prefix="/api/v1/news-monitor", tags=["News Monitor"])
 app.include_router(ws_router, prefix="/ws", tags=["WebSocket"])
 
 
