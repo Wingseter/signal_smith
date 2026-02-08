@@ -318,12 +318,39 @@ class CouncilOrchestrator:
             can_trade, trade_reason = trading_hours.can_execute_order()
 
             if can_trade or not self.respect_trading_hours:
-                signal.status = SignalStatus.AUTO_EXECUTED
-                signal.executed_at = datetime.now()
-                logger.info(f"✅ 자동 체결: {symbol} {action}")
+                # 실제 키움 API 주문 실행
+                try:
+                    side = OrderSide.BUY if action == "BUY" else OrderSide.SELL
+                    order_result = await kiwoom_client.place_order(
+                        symbol=symbol,
+                        side=side,
+                        quantity=signal.suggested_quantity,
+                        price=0,  # 시장가 주문
+                        order_type=OrderType.MARKET,
+                    )
+
+                    if order_result.status == "submitted":
+                        signal.status = SignalStatus.AUTO_EXECUTED
+                        signal.executed_at = get_kst_now()
+                        logger.info(
+                            f"✅ 자동 체결 성공: {symbol} {action} "
+                            f"{signal.suggested_quantity}주 (주문번호: {order_result.order_no})"
+                        )
+                    else:
+                        # 주문 실패 시 대기 큐에 추가
+                        signal.status = SignalStatus.QUEUED
+                        self._queued_executions.append(signal)
+                        logger.warning(
+                            f"⚠️ 자동 체결 실패, 대기 큐 추가: {symbol} {action} - {order_result.message}"
+                        )
+                except Exception as e:
+                    # 예외 발생 시 대기 큐에 추가
+                    signal.status = SignalStatus.QUEUED
+                    self._queued_executions.append(signal)
+                    logger.error(f"❌ 자동 체결 오류, 대기 큐 추가: {symbol} {action} - {e}")
             else:
                 # 거래 시간이 아니면 대기 큐에 추가
-                signal.status = SignalStatus.PENDING
+                signal.status = SignalStatus.QUEUED
                 self._queued_executions.append(signal)
                 logger.info(f"⏳ 거래 시간 대기: {symbol} {action} - {trade_reason}")
         else:
@@ -359,7 +386,7 @@ class CouncilOrchestrator:
 펀더멘털 점수: {signal.fundamental_score}/10
 {price_info}
 
-상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 승인 대기 중"}
+상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 구매 대기 중 (장 개시 후 자동 체결)" if signal.status == SignalStatus.QUEUED else "⏳ 승인 대기 중"}
 
 📊 데이터 소스:
 {"• 📈 키움증권 실시간 차트 데이터" if technical_data else "• ⚠️ 차트 데이터 없음"}
@@ -397,11 +424,46 @@ class CouncilOrchestrator:
         return self._meetings[-limit:]
 
     async def approve_signal(self, signal_id: str) -> Optional[InvestmentSignal]:
-        """시그널 승인"""
+        """시그널 승인 - BUY/SELL인 경우 자동으로 체결 시도 또는 대기열 추가"""
         for signal in self._pending_signals:
             if signal.id == signal_id and signal.status == SignalStatus.PENDING:
                 signal.status = SignalStatus.APPROVED
                 logger.info(f"시그널 승인됨: {signal.symbol} {signal.action}")
+                
+                # HOLD가 아닌 경우 (BUY/SELL) 체결 시도
+                if signal.action in ["BUY", "SELL"]:
+                    can_trade, reason = trading_hours.can_execute_order()
+                    
+                    if can_trade or not self.respect_trading_hours:
+                        # 거래 가능 시간 - 즉시 체결 시도
+                        try:
+                            side = OrderSide.BUY if signal.action == "BUY" else OrderSide.SELL
+                            order_result = await kiwoom_client.place_order(
+                                symbol=signal.symbol,
+                                side=side,
+                                quantity=signal.suggested_quantity,
+                                price=0,
+                                order_type=OrderType.MARKET,
+                            )
+                            
+                            if order_result.status == "submitted":
+                                signal.status = SignalStatus.EXECUTED
+                                signal.executed_at = get_kst_now()
+                                logger.info(
+                                    f"✅ 승인 후 즉시 체결: {signal.symbol} {signal.action} "
+                                    f"{signal.suggested_quantity}주 (주문번호: {order_result.order_no})"
+                                )
+                            else:
+                                logger.warning(f"주문 실패, 대기열에 추가: {signal.symbol} - {order_result.message}")
+                                self._queued_executions.append(signal)
+                        except Exception as e:
+                            logger.error(f"주문 오류, 대기열에 추가: {signal.symbol} - {e}")
+                            self._queued_executions.append(signal)
+                    else:
+                        # 거래 불가 시간 - 대기열에 추가
+                        logger.info(f"거래 시간 외, 대기열에 추가: {signal.symbol} {signal.action} - {reason}")
+                        self._queued_executions.append(signal)
+                
                 return signal
         return None
 
@@ -608,13 +670,39 @@ class CouncilOrchestrator:
 
         # 자동 체결 처리
         if self.auto_execute:
-            can_trade, _ = trading_hours.can_execute_order()
+            can_trade, trade_reason = trading_hours.can_execute_order()
             if can_trade or not self.respect_trading_hours:
-                signal.status = SignalStatus.AUTO_EXECUTED
-                signal.executed_at = datetime.now()
+                # 실제 키움 API 매도 주문 실행
+                try:
+                    order_result = await kiwoom_client.place_order(
+                        symbol=symbol,
+                        side=OrderSide.SELL,
+                        quantity=sell_quantity,
+                        price=0,  # 시장가 주문
+                        order_type=OrderType.MARKET,
+                    )
+
+                    if order_result.status == "submitted":
+                        signal.status = SignalStatus.AUTO_EXECUTED
+                        signal.executed_at = get_kst_now()
+                        logger.info(
+                            f"✅ 자동 매도 성공: {symbol} {sell_quantity}주 "
+                            f"(주문번호: {order_result.order_no})"
+                        )
+                    else:
+                        signal.status = SignalStatus.QUEUED
+                        self._queued_executions.append(signal)
+                        logger.warning(
+                            f"⚠️ 자동 매도 실패, 대기 큐 추가: {symbol} - {order_result.message}"
+                        )
+                except Exception as e:
+                    signal.status = SignalStatus.QUEUED
+                    self._queued_executions.append(signal)
+                    logger.error(f"❌ 자동 매도 오류, 대기 큐 추가: {symbol} - {e}")
             else:
-                signal.status = SignalStatus.PENDING
+                signal.status = SignalStatus.QUEUED
                 self._queued_executions.append(signal)
+                logger.info(f"⏳ 매도 거래 시간 대기: {symbol} - {trade_reason}")
         else:
             signal.status = SignalStatus.PENDING
 
@@ -633,7 +721,7 @@ class CouncilOrchestrator:
 📦 매도 수량: {sell_quantity:,}주
 💵 예상 금액: {sell_amount:,}원
 
-상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 승인 대기 중"}""",
+상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 구매 대기 중 (장 개시 후 자동 체결)" if signal.status == SignalStatus.QUEUED else "⏳ 승인 대기 중"}""",
             data=signal.to_dict(),
         )
         meeting.add_message(conclusion_msg)
@@ -662,7 +750,7 @@ class CouncilOrchestrator:
         remaining = []
 
         for signal in self._queued_executions:
-            if signal.status in (SignalStatus.PENDING, SignalStatus.APPROVED):
+            if signal.status in (SignalStatus.QUEUED, SignalStatus.PENDING, SignalStatus.APPROVED):
                 try:
                     # 실제 키움 API 호출
                     side = OrderSide.BUY if signal.action == "BUY" else OrderSide.SELL

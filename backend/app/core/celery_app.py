@@ -71,6 +71,13 @@ celery_app.conf.beat_schedule = {
         "args": (90,),  # Keep 90 days
         "options": {"queue": "low_priority"},
     },
+
+    # 퀀트 시그널 스캔 - 15분마다
+    "scan-signals": {
+        "task": "app.services.tasks.scan_signals",
+        "schedule": 900.0,  # Every 15 minutes
+        "options": {"queue": "default"},
+    },
 }
 
 # Queue routing
@@ -86,4 +93,5 @@ celery_app.conf.task_routes = {
     "app.services.tasks.send_daily_report": {"queue": "low_priority"},
     "app.services.tasks.cleanup_old_data": {"queue": "low_priority"},
     "app.services.tasks.collect_historical_prices": {"queue": "low_priority"},
+    "app.services.tasks.scan_signals": {"queue": "default"},
 }

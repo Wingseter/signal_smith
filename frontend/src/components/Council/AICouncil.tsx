@@ -403,6 +403,7 @@ function SignalCard({
 
   const statusConfig: Record<string, { bg: string; text: string; label: string; icon: string }> = {
     pending: { bg: 'bg-yellow-100', text: 'text-yellow-800', label: '승인 대기', icon: '⏳' },
+    queued: { bg: 'bg-orange-100', text: 'text-orange-800', label: '구매 대기', icon: '🕐' },
     approved: { bg: 'bg-blue-100', text: 'text-blue-800', label: '승인됨', icon: '✅' },
     rejected: { bg: 'bg-red-100', text: 'text-red-800', label: '거부됨', icon: '❌' },
     executed: { bg: 'bg-green-100', text: 'text-green-800', label: '체결됨', icon: '💰' },
@@ -554,6 +555,13 @@ function SignalCard({
             >
               ❌ 거부하기
             </button>
+          </div>
+        )}
+
+        {signal.status === 'queued' && (
+          <div className="mt-4 px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl text-center">
+            <p className="text-sm font-bold text-orange-700">🕐 장 개시 후 자동 체결 예정</p>
+            <p className="text-xs text-orange-500 mt-1">거래 시간에 자동으로 주문이 실행됩니다</p>
           </div>
         )}
 
@@ -718,6 +726,13 @@ function MeetingViewer({
               >
                 ❌ 거부하기
               </button>
+            </div>
+          )}
+
+          {meeting.signal.status === 'queued' && (
+            <div className="mt-4 px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl text-center">
+              <p className="text-sm font-bold text-orange-700">🕐 장 개시 후 자동 체결 예정</p>
+              <p className="text-xs text-orange-500 mt-1">거래 시간에 자동으로 주문이 실행됩니다</p>
             </div>
           )}
 

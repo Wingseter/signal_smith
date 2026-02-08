@@ -12,6 +12,7 @@ const navItems = [
   { path: '/news-monitor', label: 'News', icon: '📰', description: '뉴스 모니터링' },
   { path: '/analysis', label: 'Analysis', icon: '🔍', description: 'AI 종합 분석' },
   { path: '/signals', label: 'Signals', icon: '📡', description: '투자 시그널' },
+  { path: '/quant-signals', label: 'Quant', icon: '🔬', description: '퀀트 시그널' },
   { path: '/portfolio', label: 'Portfolio', icon: '💼', description: '포트폴리오' },
   { path: '/trading', label: 'Trading', icon: '💹', description: '자동매매' },
   { path: '/backtest', label: 'Backtest', icon: '⏱️', description: '전략 검증' },

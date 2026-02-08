@@ -182,24 +182,29 @@ def analyze_market_news(self):
     Analyze market news using Gemini agent.
     Runs every 5 minutes.
     """
-    try:
+    async def _analyze():
         from app.agents.gemini_agent import GeminiNewsAgent
 
         agent = GeminiNewsAgent()
-        market_sentiment = run_async(agent.get_market_sentiment("KOSPI"))
+        market_sentiment = await agent.get_market_sentiment("KOSPI")
 
         logger.info(f"Market sentiment analysis: {market_sentiment.get('sentiment', 'unknown')}")
 
         # Cache the result in Redis
         from app.core.redis import get_redis
-        redis = run_async(get_redis())
+        redis = await get_redis()
         if redis:
             import json
-            run_async(redis.setex(
+            await redis.setex(
                 "market_sentiment:KOSPI",
                 300,  # 5 minutes TTL
                 json.dumps(market_sentiment)
-            ))
+            )
+
+        return market_sentiment
+
+    try:
+        market_sentiment = run_async(_analyze())
 
         return {
             "status": "success",
@@ -581,6 +586,65 @@ def send_daily_report():
 # ============================================================
 # 데이터 정리 태스크
 # ============================================================
+
+# ============================================================
+# 퀀트 시그널 스캔 태스크
+# ============================================================
+
+@celery_app.task(
+    name="app.services.tasks.scan_signals",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=120
+)
+def scan_signals(self):
+    """
+    퀀트 시그널 스캔.
+    워치리스트 종목을 대상으로 42개 트리거 평가.
+    15분마다 실행.
+    """
+    if not is_market_hours():
+        logger.info("Market is closed. Skipping signal scan.")
+        return {"status": "skipped", "reason": "market_closed"}
+
+    try:
+        # 기본 워치리스트 (DB 연동 시 확장 가능)
+        default_symbols = ["005930", "000660", "035420", "035720", "051910",
+                           "006400", "005380", "068270", "028260", "207940"]
+
+        with get_sync_db() as db:
+            try:
+                from app.models.portfolio import Watchlist
+                watchlist_symbols = db.execute(
+                    select(Watchlist.symbol).distinct()
+                ).scalars().all()
+                if watchlist_symbols:
+                    default_symbols = list(watchlist_symbols)[:30]
+            except Exception:
+                pass  # 워치리스트 테이블 없으면 기본값 사용
+
+        from app.services.signals import signal_scanner
+
+        results = run_async(signal_scanner.scan_watchlist(default_symbols))
+
+        return {
+            "status": "success",
+            "scanned": len(default_symbols),
+            "results": len(results),
+            "top_signals": [
+                {
+                    "symbol": r.symbol,
+                    "score": r.composite_score,
+                    "action": r.action.value,
+                }
+                for r in results[:5]
+            ],
+        }
+
+    except Exception as e:
+        logger.error(f"Signal scan failed: {e}")
+        self.retry(exc=e)
+
 
 @celery_app.task(name="app.services.tasks.cleanup_old_data")
 def cleanup_old_data(days: int = 90):

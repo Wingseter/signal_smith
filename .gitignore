@@ -90,6 +90,9 @@ frontend/.env
 frontend/.env.local
 frontend/coverage/
 
+# Data
+data/
+
 # Claude Code
 .claude/
 *.xlsx

@@ -661,6 +661,41 @@ export const newsMonitorApi = {
   },
 };
 
+// Quant Signals API
+export const quantSignalsApi = {
+  getStatus: async () => {
+    const response = await api.get('/signals/status');
+    return response.data;
+  },
+  getResults: async (limit: number = 50) => {
+    const response = await api.get('/signals/results', { params: { limit } });
+    return response.data;
+  },
+  scanStock: async (symbol: string) => {
+    const response = await api.get(`/signals/scan/${symbol}`);
+    return response.data;
+  },
+  scanWatchlist: async (symbols: string[]) => {
+    const response = await api.post('/signals/scan', { symbols });
+    return response.data;
+  },
+  getTopSignals: async (limit: number = 20) => {
+    const response = await api.get('/signals/top', { params: { limit } });
+    return response.data;
+  },
+};
+
+// Quant Signals WebSocket
+export const signalsWebSocket = {
+  connect: () => {
+    const wsUrl = API_BASE_URL.replace('http', 'ws');
+    return new WebSocket(`${wsUrl}/api/v1/signals/ws`);
+  },
+  ping: (ws: WebSocket) => {
+    ws.send(JSON.stringify({ type: 'ping' }));
+  },
+};
+
 // News Monitor WebSocket
 export const newsMonitorWebSocket = {
   connect: () => {

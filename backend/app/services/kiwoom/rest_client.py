@@ -387,21 +387,20 @@ class KiwoomRestClient(KiwoomBaseClient):
         # 매수: kt10000, 매도: kt10001
         tr_name = "kt10000" if side == OrderSide.BUY else "kt10001"
 
-        # 주문유형: 00-지정가, 03-시장가
-        ord_tp = "00" if order_type == OrderType.LIMIT else "03"
+        # 주문유형: 0-보통(지정가), 3-시장가
+        trde_tp = "0" if order_type == OrderType.LIMIT else "3"
 
         try:
             result = await self._request(
                 "POST",
-                "/api/dostk/order",
+                "/api/dostk/ordr",  # 수정: order → ordr
                 data={
-                    "trnm": tr_name,
-                    "acnt": self.account_number,
-                    "acnt_pwd": self.account_password,
+                    "dmst_stex_tp": "KRX",  # 국내거래소구분 (필수)
                     "stk_cd": symbol,
                     "ord_qty": str(quantity),
-                    "ord_prc": str(price) if price > 0 else "0",
-                    "ord_tp": ord_tp,
+                    "ord_uv": str(price) if price > 0 else "",  # 수정: ord_prc → ord_uv
+                    "trde_tp": trde_tp,  # 수정: ord_tp → trde_tp
+                    "cond_uv": "",  # 조건단가
                 },
                 api_id=tr_name
             )
@@ -445,14 +444,12 @@ class KiwoomRestClient(KiwoomBaseClient):
         try:
             result = await self._request(
                 "POST",
-                "/api/dostk/order",
+                "/api/dostk/ordr",  # 수정: order → ordr
                 data={
-                    "trnm": "kt10003",
-                    "acnt": self.account_number,
-                    "acnt_pwd": self.account_password,
-                    "org_ord_no": order_no,
+                    "dmst_stex_tp": "KRX",  # 국내거래소구분 (필수)
+                    "orig_ord_no": order_no,  # 수정: org_ord_no → orig_ord_no
                     "stk_cd": symbol,
-                    "cncl_qty": str(quantity),
+                    "cncl_qty": str(quantity) if quantity > 0 else "0",  # 0이면 전량 취소
                 },
                 api_id="kt10003"
             )
@@ -496,15 +493,14 @@ class KiwoomRestClient(KiwoomBaseClient):
         try:
             result = await self._request(
                 "POST",
-                "/api/dostk/order",
+                "/api/dostk/ordr",  # 수정: order → ordr
                 data={
-                    "trnm": "kt10002",
-                    "acnt": self.account_number,
-                    "acnt_pwd": self.account_password,
-                    "org_ord_no": order_no,
+                    "dmst_stex_tp": "KRX",  # 국내거래소구분 (필수)
+                    "orig_ord_no": order_no,  # 수정: org_ord_no → orig_ord_no
                     "stk_cd": symbol,
                     "mdfy_qty": str(quantity),
-                    "mdfy_prc": str(price),
+                    "mdfy_uv": str(price),  # 수정: mdfy_prc → mdfy_uv
+                    "mdfy_cond_uv": "",  # 정정조건단가
                 },
                 api_id="kt10002"
             )

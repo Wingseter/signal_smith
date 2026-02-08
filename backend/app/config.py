@@ -17,9 +17,9 @@ class Settings(BaseSettings):
     debug: bool = True
     secret_key: str = "change-me-in-production"
 
-    # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/signal_smith"
-    database_sync_url: str = "postgresql://postgres:postgres@localhost:5432/signal_smith"
+    # Database (MySQL HeatWave)
+    database_url: str = "mysql+aiomysql://admin:password@localhost:3306/signal_smith"
+    database_sync_url: str = "mysql+pymysql://admin:password@localhost:3306/signal_smith"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

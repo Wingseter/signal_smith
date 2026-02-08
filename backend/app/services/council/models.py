@@ -15,6 +15,7 @@ class SignalStatus(str, Enum):
     EXECUTED = "executed"        # 체결됨
     EXPIRED = "expired"          # 만료됨
     AUTO_EXECUTED = "auto_executed"  # 자동 체결됨
+    QUEUED = "queued"            # 자동매매 구매 대기 (거래시간 외)
 
 
 class AnalystRole(str, Enum):

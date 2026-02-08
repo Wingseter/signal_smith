@@ -1,32 +1,11 @@
-version: '3.8'
-
 services:
-  # PostgreSQL Database
-  db:
-    image: postgres:16-alpine
-    container_name: signal_smith_db
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: signal_smith
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # Redis
   redis:
     image: redis:7-alpine
     container_name: signal_smith_redis
+    network_mode: host
     volumes:
       - redis_data:/data
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -39,20 +18,15 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: signal_smith_backend
+    network_mode: host
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/signal_smith
-      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=mysql+aiomysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
+      - DATABASE_SYNC_URL=mysql+pymysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
+      - REDIS_URL=redis://localhost:6379/0
     env_file:
-      - .env
+      - ./backend/.env
     volumes:
       - ./backend:/app
-    ports:
-      - "8000:8000"
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   # Celery Worker
@@ -61,19 +35,16 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: signal_smith_celery
+    network_mode: host
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/signal_smith
-      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=mysql+aiomysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
+      - DATABASE_SYNC_URL=mysql+pymysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
+      - REDIS_URL=redis://localhost:6379/0
     env_file:
-      - .env
+      - ./backend/.env
     volumes:
       - ./backend:/app
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: celery -A app.core.celery_app worker --loglevel=info
+    command: celery -A app.core.celery_app worker --loglevel=info -Q celery,default,high_priority,low_priority
 
   # Celery Beat (Scheduler)
   celery_beat:
@@ -81,19 +52,16 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: signal_smith_celery_beat
+    network_mode: host
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/signal_smith
-      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=mysql+aiomysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
+      - DATABASE_SYNC_URL=mysql+pymysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
+      - REDIS_URL=redis://localhost:6379/0
     env_file:
-      - .env
+      - ./backend/.env
     volumes:
       - ./backend:/app
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: celery -A app.core.celery_app beat --loglevel=info
+    command: celery -A app.core.celery_app beat --loglevel=info -s /tmp/celerybeat-schedule
 
   # React Frontend
   frontend:
@@ -101,18 +69,14 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: signal_smith_frontend
+    network_mode: host
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    ports:
-      - "3000:3000"
     environment:
-      - VITE_API_URL=http://localhost:8000
-      - VITE_WS_URL=ws://localhost:8000
-    depends_on:
-      - backend
+      - VITE_API_URL=https://emolgalab.duckdns.org
+      - VITE_WS_URL=wss://emolgalab.duckdns.org
     command: npm run dev -- --host
 
 volumes:
-  postgres_data:
   redis_data:
