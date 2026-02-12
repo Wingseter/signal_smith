@@ -72,10 +72,17 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "low_priority"},
     },
 
-    # 퀀트 시그널 스캔 - 15분마다
+    # 퀀트 시그널 스캔 - 15분마다 (상위 500종목)
     "scan-signals": {
         "task": "app.services.tasks.scan_signals",
         "schedule": 900.0,  # Every 15 minutes
+        "options": {"queue": "default"},
+    },
+
+    # 종목 유니버스 갱신 - 매일 08:50 (장 시작 전)
+    "refresh-stock-universe": {
+        "task": "app.services.tasks.refresh_stock_universe",
+        "schedule": crontab(hour=8, minute=50),
         "options": {"queue": "default"},
     },
 }
@@ -94,4 +101,5 @@ celery_app.conf.task_routes = {
     "app.services.tasks.cleanup_old_data": {"queue": "low_priority"},
     "app.services.tasks.collect_historical_prices": {"queue": "low_priority"},
     "app.services.tasks.scan_signals": {"queue": "default"},
+    "app.services.tasks.refresh_stock_universe": {"queue": "default"},
 }

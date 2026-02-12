@@ -38,7 +38,7 @@ class CouncilOrchestrator:
         self._meeting_callbacks: List[Callable[[CouncilMeeting], Awaitable[None]]] = []
 
         # 설정
-        self.auto_execute = False          # 자동 체결 여부
+        self.auto_execute = True           # 자동 체결 여부 (기본 ON)
         self.min_confidence = 0.6          # 최소 신뢰도
         self.meeting_trigger_score = 7     # 회의 소집 기준 점수
         self.respect_trading_hours = True  # 거래 시간 존중 여부

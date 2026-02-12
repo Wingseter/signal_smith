@@ -123,18 +123,22 @@ class SignalScanner:
             logger.error(f"[{symbol}] 스캔 실패: {e}")
             return None
 
-    async def scan_watchlist(self, symbols: List[str]) -> List[SignalResult]:
-        """워치리스트 종목 스캔
+    async def scan_watchlist(
+        self, symbols: List[str], max_concurrent: int = 5
+    ) -> List[SignalResult]:
+        """워치리스트 종목 동시 스캔
 
         Args:
             symbols: 종목코드 리스트
+            max_concurrent: 최대 동시 스캔 수 (기본 5)
 
         Returns:
-            스캔 결과 리스트
+            스캔 결과 리스트 (점수 내림차순)
         """
         self._is_scanning = True
-        results = []
         total = len(symbols)
+        scanned_count = 0
+        semaphore = asyncio.Semaphore(max_concurrent)
 
         await self._notify_scan_update({
             "type": "scan_started",
@@ -142,27 +146,38 @@ class SignalScanner:
             "timestamp": datetime.now().isoformat(),
         })
 
-        for i, symbol in enumerate(symbols):
-            try:
-                result = await self.scan_stock(symbol)
-                if result:
-                    results.append(result)
-                    await self._notify_signal(result)
+        async def _scan_one(symbol: str) -> Optional[SignalResult]:
+            nonlocal scanned_count
+            async with semaphore:
+                try:
+                    result = await self.scan_stock(symbol)
+                    scanned_count += 1
 
-                await self._notify_scan_update({
-                    "type": "scan_progress",
-                    "current": i + 1,
-                    "total": total,
-                    "symbol": symbol,
-                    "score": result.composite_score if result else None,
-                })
+                    if result:
+                        await self._notify_signal(result)
 
-                # API 호출 간 딜레이
-                if i < total - 1:
-                    await asyncio.sleep(0.5)
+                    # 진행 상황 알림 (50개 단위)
+                    if scanned_count % 50 == 0 or scanned_count == total:
+                        await self._notify_scan_update({
+                            "type": "scan_progress",
+                            "current": scanned_count,
+                            "total": total,
+                            "symbol": symbol,
+                            "score": result.composite_score if result else None,
+                        })
 
-            except Exception as e:
-                logger.error(f"[{symbol}] 스캔 오류: {e}")
+                    # API rate limit 보호
+                    await asyncio.sleep(0.3)
+                    return result
+
+                except Exception as e:
+                    logger.error(f"[{symbol}] 스캔 오류: {e}")
+                    scanned_count += 1
+                    return None
+
+        tasks = [_scan_one(s) for s in symbols]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = [r for r in raw_results if isinstance(r, SignalResult)]
 
         self._is_scanning = False
         self._last_scan_at = datetime.now()
@@ -177,6 +192,7 @@ class SignalScanner:
             "timestamp": datetime.now().isoformat(),
         })
 
+        logger.info(f"스캔 완료: {total}종목 중 {len(results)}개 결과")
         return results
 
     async def get_top_signals(self, limit: int = 20) -> List[SignalResult]:

@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     telegram_chat_id: Optional[str] = None
 
     # Trading Settings
-    trading_enabled: bool = False
+    trading_enabled: bool = True
     max_position_size: int = 1000000
     stop_loss_percent: float = 3.0
     take_profit_percent: float = 5.0

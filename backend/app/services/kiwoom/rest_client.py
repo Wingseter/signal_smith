@@ -174,7 +174,8 @@ class KiwoomRestClient(KiwoomBaseClient):
         method: str,
         endpoint: str,
         data: Dict[str, Any] = None,
-        api_id: str = None
+        api_id: str = None,
+        _retry: bool = False
     ) -> Dict[str, Any]:
         """API 요청 공통 메서드"""
         if not await self.is_connected():
@@ -200,11 +201,33 @@ class KiwoomRestClient(KiwoomBaseClient):
             response.raise_for_status()
             result = response.json()
 
+            # 토큰 만료 에러 시 재발급 후 재시도
+            return_msg = result.get("return_msg", "")
+            if result.get("return_code") != 0 and ("8005" in str(return_msg) or "유효하지" in str(return_msg)):
+                if not _retry:
+                    logger.info("토큰 만료 감지, 재발급 시도...")
+                    await self._invalidate_token()
+                    await self.connect()
+                    return await self._request(method, endpoint, data, api_id, _retry=True)
+
             # 에러 체크
             if result.get("return_code") != 0:
                 logger.warning(f"API 요청 실패: {result.get('return_msg')}")
 
             return result
+
+    async def _invalidate_token(self):
+        """캐시된 토큰 무효화"""
+        self._access_token = None
+        self._token_expires_at = None
+        self._connected = False
+        try:
+            redis = await get_redis()
+            cache_key = f"kiwoom:token:{'mock' if self.is_mock else 'real'}"
+            await redis.delete(cache_key)
+            logger.info("캐시된 토큰 삭제 완료")
+        except Exception as e:
+            logger.warning(f"토큰 캐시 삭제 실패: {e}")
 
     # ========== 시세 조회 ==========
 

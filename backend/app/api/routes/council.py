@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from app.services.news import news_trader, news_monitor
 from app.services.council import council_orchestrator, CouncilMeeting, InvestmentSignal
+from app.services.trading_service import trading_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["AI Council"])
@@ -25,7 +26,7 @@ class CouncilConfig(BaseModel):
     """회의 설정"""
     council_threshold: int = 7
     sell_threshold: int = 3
-    auto_execute: bool = False
+    auto_execute: bool = True
     max_position_per_stock: int = 500000
     poll_interval: int = 60
 
@@ -417,6 +418,59 @@ async def get_queued_executions():
         "signals": [s.to_dict() for s in signals],
         "total": len(signals),
     }
+
+
+@router.get("/account/balance")
+async def get_account_balance():
+    """키움 계좌 잔고 조회"""
+    summary = await _get_account_summary()
+    return summary["balance"]
+
+
+@router.get("/account/holdings")
+async def get_account_holdings():
+    """키움 보유종목 조회"""
+    summary = await _get_account_summary()
+    return {"holdings": summary["holdings"], "count": len(summary["holdings"])}
+
+
+@router.get("/account/summary")
+async def get_account_summary():
+    """계좌 잔고 + 보유종목 통합 조회 (캐시 적용)"""
+    return await _get_account_summary()
+
+
+async def _get_account_summary() -> dict:
+    """계좌 정보 통합 조회 (10초 Redis 캐시)"""
+    import json
+    from app.core.redis import get_redis
+
+    cache_key = "account:summary"
+    try:
+        redis = await get_redis()
+        cached = await redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    # 키움 API 순차 호출 (동시 호출 시 토큰 경쟁 방지)
+    balance = await trading_service.get_account_balance()
+    holdings = await trading_service.get_holdings()
+
+    result = {
+        "balance": balance,
+        "holdings": holdings,
+        "count": len(holdings),
+    }
+
+    try:
+        redis = await get_redis()
+        await redis.set(cache_key, json.dumps(result), ex=10)
+    except Exception:
+        pass
+
+    return result
 
 
 @router.post("/process-queue")

@@ -20,22 +20,26 @@ logger = logging.getLogger(__name__)
 
 def run_async(coro):
     """Helper to run async functions in sync context."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 def is_market_hours() -> bool:
-    """Check if Korean stock market is open."""
-    now = datetime.now()
-    if now.weekday() >= 5:  # Saturday or Sunday
+    """Check if Korean stock market is open (KST)."""
+    from zoneinfo import ZoneInfo
+    now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+    if now_kst.weekday() >= 5:  # Saturday or Sunday
         return False
-    market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
-    return market_open <= now <= market_close
+    market_open = now_kst.replace(hour=9, minute=0, second=0, microsecond=0)
+    market_close = now_kst.replace(hour=15, minute=30, second=0, microsecond=0)
+    return market_open <= now_kst <= market_close
 
 
 # ============================================================
@@ -345,8 +349,7 @@ def monitor_signals(self):
         with get_sync_db() as db:
             pending_signals = db.execute(
                 select(TradingSignal).where(
-                    TradingSignal.executed == False,
-                    TradingSignal.is_active == True
+                    TradingSignal.is_executed == False,
                 )
             ).scalars().all()
 
@@ -374,7 +377,7 @@ def monitor_signals(self):
                             "symbol": signal.symbol,
                             "price": price,
                         })
-                        signal.is_active = False
+                        signal.is_executed = True
                         send_notification.delay(
                             "stop_loss",
                             f"[손절] {signal.symbol}: {price:,}원 도달"
@@ -393,7 +396,7 @@ def monitor_signals(self):
                         )
 
                     elif signal.created_at < datetime.utcnow() - timedelta(hours=24):
-                        signal.is_active = False
+                        signal.is_executed = True
                         actions.append({
                             "signal_id": signal.id,
                             "action": "expired",
@@ -595,41 +598,31 @@ def send_daily_report():
     name="app.services.tasks.scan_signals",
     bind=True,
     max_retries=2,
-    default_retry_delay=120
+    default_retry_delay=120,
+    time_limit=600,       # 10분 하드 리밋
+    soft_time_limit=540,  # 9분 소프트 리밋
 )
 def scan_signals(self):
     """
-    퀀트 시그널 스캔.
-    워치리스트 종목을 대상으로 42개 트리거 평가.
-    15분마다 실행.
+    퀀트 시그널 스캔 (상위 500종목).
+    시가총액 기준 상위 500종목을 대상으로 42개 트리거 평가.
+    15분마다 실행. Semaphore 기반 동시 5개 스캔.
     """
     if not is_market_hours():
         logger.info("Market is closed. Skipping signal scan.")
         return {"status": "skipped", "reason": "market_closed"}
 
     try:
-        # 기본 워치리스트 (DB 연동 시 확장 가능)
-        default_symbols = ["005930", "000660", "035420", "035720", "051910",
-                           "006400", "005380", "068270", "028260", "207940"]
-
-        with get_sync_db() as db:
-            try:
-                from app.models.portfolio import Watchlist
-                watchlist_symbols = db.execute(
-                    select(Watchlist.symbol).distinct()
-                ).scalars().all()
-                if watchlist_symbols:
-                    default_symbols = list(watchlist_symbols)[:30]
-            except Exception:
-                pass  # 워치리스트 테이블 없으면 기본값 사용
+        symbols = _load_scan_universe(limit=500)
+        logger.info(f"Signal scan starting: {len(symbols)} symbols")
 
         from app.services.signals import signal_scanner
 
-        results = run_async(signal_scanner.scan_watchlist(default_symbols))
+        results = run_async(signal_scanner.scan_watchlist(symbols, max_concurrent=5))
 
         return {
             "status": "success",
-            "scanned": len(default_symbols),
+            "scanned": len(symbols),
             "results": len(results),
             "top_signals": [
                 {
@@ -637,13 +630,170 @@ def scan_signals(self):
                     "score": r.composite_score,
                     "action": r.action.value,
                 }
-                for r in results[:5]
+                for r in results[:10]
             ],
         }
 
     except Exception as e:
         logger.error(f"Signal scan failed: {e}")
         self.retry(exc=e)
+
+
+def _load_scan_universe(limit: int = 500) -> List[str]:
+    """스캔 대상 종목 로드 (Redis 캐시 → DB 폴백).
+
+    Returns:
+        시가총액 상위 종목코드 리스트
+    """
+    import json
+
+    # 1) Redis 캐시 확인
+    try:
+        redis = run_async(_get_cached_universe())
+        if redis:
+            symbols = json.loads(redis)
+            logger.info(f"Loaded {len(symbols)} symbols from Redis cache")
+            return symbols[:limit]
+    except Exception as e:
+        logger.warning(f"Redis cache miss for stock universe: {e}")
+
+    # 2) DB 폴백: Stock 테이블에서 시가총액 상위
+    try:
+        with get_sync_db() as db:
+            from sqlalchemy import desc
+            stocks = db.execute(
+                select(Stock.symbol, Stock.market, Stock.market_cap)
+                .where(Stock.is_active == True)
+                .order_by(
+                    desc(Stock.market_cap.isnot(None)),  # market_cap 있는 것 우선
+                    Stock.market,  # KOSDAQ < KOSPI (KOSPI 우선 정렬)
+                    desc(Stock.market_cap),
+                )
+                .limit(limit)
+            ).all()
+
+            if stocks:
+                symbols = [s.symbol for s in stocks]
+                logger.info(f"Loaded {len(symbols)} symbols from DB")
+                return symbols
+    except Exception as e:
+        logger.warning(f"DB stock universe load failed: {e}")
+
+    # 3) 하드코딩 폴백 (대형주 10개)
+    logger.warning("Using fallback symbol list")
+    return ["005930", "000660", "035420", "035720", "051910",
+            "006400", "005380", "068270", "028260", "207940"]
+
+
+async def _get_cached_universe() -> Optional[str]:
+    """Redis에서 캐시된 종목 유니버스 조회"""
+    from app.core.redis import get_redis
+    redis = await get_redis()
+    return await redis.get("stock_universe:top500")
+
+
+@celery_app.task(
+    name="app.services.tasks.refresh_stock_universe",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+    time_limit=300,
+    soft_time_limit=240,
+)
+def refresh_stock_universe(self):
+    """
+    종목 유니버스 갱신.
+    KOSPI + KOSDAQ 전체 종목 조회 → Stock 테이블 upsert + Redis 캐시.
+    매일 08:50 실행 (장 시작 전).
+    """
+    try:
+        result = run_async(_refresh_universe_async())
+        return result
+    except Exception as e:
+        logger.error(f"Stock universe refresh failed: {e}")
+        self.retry(exc=e)
+
+
+async def _refresh_universe_async() -> dict:
+    """종목 유니버스 갱신 비동기 로직"""
+    import json
+    from app.services.kiwoom.rest_client import kiwoom_client
+    from app.core.redis import get_redis
+
+    if not await kiwoom_client.is_connected():
+        await kiwoom_client.connect()
+
+    # KOSPI + KOSDAQ 전체 종목 조회
+    kospi_stocks = await kiwoom_client.get_market_stocks("KOSPI")
+    kosdaq_stocks = await kiwoom_client.get_market_stocks("KOSDAQ")
+    all_stocks = kospi_stocks + kosdaq_stocks
+
+    logger.info(f"Fetched stocks: KOSPI={len(kospi_stocks)}, KOSDAQ={len(kosdaq_stocks)}")
+
+    if not all_stocks:
+        return {"status": "error", "reason": "no_stocks_fetched"}
+
+    # DB upsert
+    upserted = 0
+    with get_sync_db() as db:
+        for stock_data in all_stocks:
+            symbol = stock_data.get("symbol", "")
+            if not symbol:
+                continue
+
+            existing = db.execute(
+                select(Stock).where(Stock.symbol == symbol)
+            ).scalar_one_or_none()
+
+            if existing:
+                existing.name = stock_data.get("name", existing.name)
+                existing.market = stock_data.get("market", existing.market)
+                existing.is_active = True
+            else:
+                new_stock = Stock(
+                    symbol=symbol,
+                    name=stock_data.get("name", ""),
+                    market=stock_data.get("market", ""),
+                    is_active=True,
+                )
+                db.add(new_stock)
+            upserted += 1
+
+        db.commit()
+
+        # 시가총액 상위 500 선별 (market_cap 있으면 기준, 없으면 KOSPI 우선)
+        from sqlalchemy import desc
+        top_stocks = db.execute(
+            select(Stock.symbol)
+            .where(Stock.is_active == True)
+            .order_by(
+                desc(Stock.market_cap.isnot(None)),
+                Stock.market,  # KOSDAQ < KOSPI → KOSPI 우선
+                desc(Stock.market_cap),
+            )
+            .limit(500)
+        ).scalars().all()
+
+    top_symbols = list(top_stocks)
+
+    # Redis 캐시 (1일 TTL)
+    try:
+        redis = await get_redis()
+        await redis.set(
+            "stock_universe:top500",
+            json.dumps(top_symbols),
+            ex=86400,  # 24시간
+        )
+        logger.info(f"Cached {len(top_symbols)} symbols to Redis")
+    except Exception as e:
+        logger.warning(f"Redis cache failed: {e}")
+
+    return {
+        "status": "success",
+        "total_fetched": len(all_stocks),
+        "upserted": upserted,
+        "universe_size": len(top_symbols),
+    }
 
 
 @celery_app.task(name="app.services.tasks.cleanup_old_data")

@@ -29,7 +29,7 @@ class TradingConfig:
     cooldown_minutes: int = 30               # 같은 종목 재매매 대기 시간
     require_symbol: bool = True              # 종목코드 필수 (True: 종목코드 없으면 회의 안 함)
     min_confidence: float = 0.6              # 최소 신뢰도
-    auto_execute: bool = False               # 자동 체결 (False면 승인 필요)
+    auto_execute: bool = True                # 자동 체결 (기본 ON)
     analyze_all_news: bool = True            # 모든 뉴스 분석 (트리거 키워드 무시)
 
 

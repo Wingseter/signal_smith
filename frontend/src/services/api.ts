@@ -536,7 +536,7 @@ export const councilApi = {
     max_position_per_stock?: number;
     poll_interval?: number;
   }) => {
-    const response = await api.post('/council/start', config || {});
+    const response = await api.post('/council/start', config ?? undefined);
     return response.data;
   },
   stop: async () => {
@@ -605,6 +605,18 @@ export const councilApi = {
   processQueue: async () => {
     const response = await api.post('/council/process-queue');
     return response.data;
+  },
+  getAccountSummary: async () => {
+    const response = await api.get('/council/account/summary');
+    return response.data;
+  },
+  getAccountBalance: async () => {
+    const summary = await councilApi.getAccountSummary();
+    return summary.balance;
+  },
+  getAccountHoldings: async () => {
+    const summary = await councilApi.getAccountSummary();
+    return { holdings: summary.holdings, count: summary.count };
   },
   // 테스트 API
   testAnalyzeNews: async () => {
