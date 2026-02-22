@@ -1,6 +1,7 @@
 from functools import lru_cache
-from typing import Optional
+from typing import List, Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,9 +18,15 @@ class Settings(BaseSettings):
     debug: bool = True
     secret_key: str = "change-me-in-production"
 
-    # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/signal_smith"
-    database_sync_url: str = "postgresql://postgres:postgres@localhost:5432/signal_smith"
+    # CORS
+    cors_origins: List[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+    # Database (MySQL HeatWave)
+    database_url: str = "mysql+aiomysql://admin:password@localhost:3306/signal_smith"
+    database_sync_url: str = "mysql+pymysql://admin:password@localhost:3306/signal_smith"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"
@@ -60,10 +67,18 @@ class Settings(BaseSettings):
     telegram_chat_id: Optional[str] = None
 
     # Trading Settings
-    trading_enabled: bool = False
+    trading_enabled: bool = True
     max_position_size: int = 1000000
-    stop_loss_percent: float = 3.0
-    take_profit_percent: float = 5.0
+
+    # 기본 손절/익절 % (GPT 값이 없을 때 fallback)
+    stop_loss_percent: float = 5.0
+    take_profit_percent: float = 20.0
+
+    # 안전 바운드 (GPT 값이 이 범위를 벗어나면 clamp)
+    min_stop_loss_percent: float = 3.0    # 최소 손절폭
+    max_stop_loss_percent: float = 15.0   # 최대 손절폭
+    min_take_profit_percent: float = 5.0  # 최소 목표 수익
+    max_take_profit_percent: float = 50.0 # 최대 목표 수익
 
     # JWT Settings
     access_token_expire_minutes: int = 30
@@ -73,6 +88,20 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @model_validator(mode="after")
+    def _validate_production(self) -> "Settings":
+        """Reject insecure defaults when running in production."""
+        if not self.is_production:
+            return self
+        if self.secret_key == "change-me-in-production":
+            raise ValueError(
+                "SECRET_KEY must be set to a secure random value in production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+            )
+        if self.debug:
+            raise ValueError("DEBUG must be False in production.")
+        return self
 
 
 @lru_cache

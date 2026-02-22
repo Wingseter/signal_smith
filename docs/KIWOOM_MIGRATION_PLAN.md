@@ -62,18 +62,18 @@ POST /oauth2/token
 
 **현재 (.env):**
 ```env
-KIS_APP_KEY=55cTqr36W15npixPwgF_avbrW9BIJlwRr6Rga88EgLE
-KIS_APP_SECRET=7A-SQcd_OV-DM5kptJXx-in2Iouon5qN2fAoN8ud9lM
-KIS_ACCOUNT_NUMBER=81175471
+KIS_APP_KEY=your-kis-app-key
+KIS_APP_SECRET=your-kis-app-secret
+KIS_ACCOUNT_NUMBER=your-account-number
 KIS_BASE_URL=https://openapivts.koreainvestment.com:29443
 KIS_WS_URL=ws://ops.koreainvestment.com:31000
 ```
 
 **변경 (.env):**
 ```env
-KIWOOM_APP_KEY=55cTqr36W15npixPwgF_avbrW9BIJlwRr6Rga88EgLE
-KIWOOM_SECRET_KEY=7A-SQcd_OV-DM5kptJXx-in2Iouon5qN2fAoN8ud9lM
-KIWOOM_ACCOUNT_NUMBER=81175471
+KIWOOM_APP_KEY=your-kiwoom-app-key
+KIWOOM_SECRET_KEY=your-kiwoom-secret-key
+KIWOOM_ACCOUNT_NUMBER=your-account-number
 KIWOOM_BASE_URL=https://mockapi.kiwoom.com
 KIWOOM_WS_URL=wss://mockapi.kiwoom.com:10000
 KIWOOM_IS_MOCK=true

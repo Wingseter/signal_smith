@@ -22,6 +22,7 @@ from app.services.kiwoom.base import (
     OrderResult,
     Balance,
     Holding,
+    RealizedPnlItem,
     OrderType,
     OrderSide,
 )
@@ -174,7 +175,8 @@ class KiwoomRestClient(KiwoomBaseClient):
         method: str,
         endpoint: str,
         data: Dict[str, Any] = None,
-        api_id: str = None
+        api_id: str = None,
+        _retry: bool = False
     ) -> Dict[str, Any]:
         """API 요청 공통 메서드"""
         if not await self.is_connected():
@@ -200,11 +202,33 @@ class KiwoomRestClient(KiwoomBaseClient):
             response.raise_for_status()
             result = response.json()
 
+            # 토큰 만료 에러 시 재발급 후 재시도
+            return_msg = result.get("return_msg", "")
+            if result.get("return_code") != 0 and ("8005" in str(return_msg) or "유효하지" in str(return_msg)):
+                if not _retry:
+                    logger.info("토큰 만료 감지, 재발급 시도...")
+                    await self._invalidate_token()
+                    await self.connect()
+                    return await self._request(method, endpoint, data, api_id, _retry=True)
+
             # 에러 체크
             if result.get("return_code") != 0:
                 logger.warning(f"API 요청 실패: {result.get('return_msg')}")
 
             return result
+
+    async def _invalidate_token(self):
+        """캐시된 토큰 무효화"""
+        self._access_token = None
+        self._token_expires_at = None
+        self._connected = False
+        try:
+            redis = await get_redis()
+            cache_key = f"kiwoom:token:{'mock' if self.is_mock else 'real'}"
+            await redis.delete(cache_key)
+            logger.info("캐시된 토큰 삭제 완료")
+        except Exception as e:
+            logger.warning(f"토큰 캐시 삭제 실패: {e}")
 
     # ========== 시세 조회 ==========
 
@@ -387,21 +411,20 @@ class KiwoomRestClient(KiwoomBaseClient):
         # 매수: kt10000, 매도: kt10001
         tr_name = "kt10000" if side == OrderSide.BUY else "kt10001"
 
-        # 주문유형: 00-지정가, 03-시장가
-        ord_tp = "00" if order_type == OrderType.LIMIT else "03"
+        # 주문유형: 0-보통(지정가), 3-시장가
+        trde_tp = "0" if order_type == OrderType.LIMIT else "3"
 
         try:
             result = await self._request(
                 "POST",
-                "/api/dostk/order",
+                "/api/dostk/ordr",  # 수정: order → ordr
                 data={
-                    "trnm": tr_name,
-                    "acnt": self.account_number,
-                    "acnt_pwd": self.account_password,
+                    "dmst_stex_tp": "KRX",  # 국내거래소구분 (필수)
                     "stk_cd": symbol,
                     "ord_qty": str(quantity),
-                    "ord_prc": str(price) if price > 0 else "0",
-                    "ord_tp": ord_tp,
+                    "ord_uv": str(price) if price > 0 else "",  # 수정: ord_prc → ord_uv
+                    "trde_tp": trde_tp,  # 수정: ord_tp → trde_tp
+                    "cond_uv": "",  # 조건단가
                 },
                 api_id=tr_name
             )
@@ -445,14 +468,12 @@ class KiwoomRestClient(KiwoomBaseClient):
         try:
             result = await self._request(
                 "POST",
-                "/api/dostk/order",
+                "/api/dostk/ordr",  # 수정: order → ordr
                 data={
-                    "trnm": "kt10003",
-                    "acnt": self.account_number,
-                    "acnt_pwd": self.account_password,
-                    "org_ord_no": order_no,
+                    "dmst_stex_tp": "KRX",  # 국내거래소구분 (필수)
+                    "orig_ord_no": order_no,  # 수정: org_ord_no → orig_ord_no
                     "stk_cd": symbol,
-                    "cncl_qty": str(quantity),
+                    "cncl_qty": str(quantity) if quantity > 0 else "0",  # 0이면 전량 취소
                 },
                 api_id="kt10003"
             )
@@ -496,15 +517,14 @@ class KiwoomRestClient(KiwoomBaseClient):
         try:
             result = await self._request(
                 "POST",
-                "/api/dostk/order",
+                "/api/dostk/ordr",  # 수정: order → ordr
                 data={
-                    "trnm": "kt10002",
-                    "acnt": self.account_number,
-                    "acnt_pwd": self.account_password,
-                    "org_ord_no": order_no,
+                    "dmst_stex_tp": "KRX",  # 국내거래소구분 (필수)
+                    "orig_ord_no": order_no,  # 수정: org_ord_no → orig_ord_no
                     "stk_cd": symbol,
                     "mdfy_qty": str(quantity),
-                    "mdfy_prc": str(price),
+                    "mdfy_uv": str(price),  # 수정: mdfy_prc → mdfy_uv
+                    "mdfy_cond_uv": "",  # 정정조건단가
                 },
                 api_id="kt10002"
             )
@@ -728,6 +748,113 @@ class KiwoomRestClient(KiwoomBaseClient):
 
         except Exception as e:
             logger.error(f"보유종목 조회 실패: {str(e)}")
+            return []
+
+    async def get_realized_pnl(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[RealizedPnlItem]:
+        """
+        일자별 종목별 실현손익 조회 (ka10073 - 일자별종목별실현손익요청_기간)
+
+        Args:
+            start_date: 시작일 (YYYYMMDD)
+            end_date: 종료일 (YYYYMMDD)
+
+        Returns:
+            실현손익 항목 리스트
+        """
+        def parse_int(val) -> int:
+            if val is None:
+                return 0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                if cleaned.startswith("-"):
+                    return -int(cleaned[1:])
+                elif cleaned.startswith("+"):
+                    return int(cleaned[1:])
+                return int(cleaned) if cleaned else 0
+            except (ValueError, TypeError):
+                return 0
+
+        def parse_float(val) -> float:
+            if val is None:
+                return 0.0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                if cleaned.startswith("-"):
+                    return -float(cleaned[1:])
+                elif cleaned.startswith("+"):
+                    return float(cleaned[1:])
+                return float(cleaned) if cleaned else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        if not end_date:
+            end_date = datetime.now().strftime("%Y%m%d")
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+
+        try:
+            all_items: List[RealizedPnlItem] = []
+            cont_yn = "N"
+            next_key = ""
+
+            while True:
+                headers = self._get_headers(api_id="ka10073", cont_yn=cont_yn, next_key=next_key)
+
+                async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                    response = await client.post(
+                        f"{self.base_url}/api/dostk/acnt",
+                        headers=headers,
+                        json={
+                            "stk_cd": "",
+                            "strt_dt": start_date,
+                            "end_dt": end_date,
+                        },
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+
+                if result.get("return_code") != 0:
+                    if not all_items:
+                        logger.warning(f"ka10073 조회 실패: {result.get('return_msg')}")
+                    break
+
+                items = result.get("dt_stk_rlzt_pl", [])
+                for item in items:
+                    stk_cd = str(item.get("stk_cd", "")).replace("A", "").strip()
+                    if not stk_cd:
+                        continue
+
+                    all_items.append(RealizedPnlItem(
+                        date=item.get("dt", ""),
+                        symbol=stk_cd,
+                        name=item.get("stk_nm", "").strip(),
+                        quantity=parse_int(item.get("cntr_qty")),
+                        buy_price=parse_int(item.get("buy_uv")),
+                        sell_price=parse_int(item.get("cntr_pric")),
+                        profit_loss=parse_int(item.get("tdy_sel_pl")),
+                        profit_rate=parse_float(item.get("pl_rt")),
+                        commission=parse_int(item.get("tdy_trde_cmsn")),
+                        tax=parse_int(item.get("tdy_trde_tax")),
+                    ))
+
+                # 연속조회 처리
+                resp_cont_yn = result.get("cont_yn", "N")
+                resp_next_key = result.get("next_key", "")
+                if resp_cont_yn == "Y" and resp_next_key:
+                    cont_yn = "Y"
+                    next_key = resp_next_key
+                else:
+                    break
+
+            logger.info(f"ka10073 - 실현손익 {len(all_items)}건 조회 ({start_date}~{end_date})")
+            return all_items
+
+        except Exception as e:
+            logger.error(f"실현손익 조회 실패: {str(e)}")
             return []
 
     async def get_order_history(

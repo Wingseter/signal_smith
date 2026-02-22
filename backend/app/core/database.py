@@ -49,9 +49,15 @@ sync_session_maker = sessionmaker(
 
 
 async def init_db() -> None:
-    """Initialize database tables."""
+    """Verify database connectivity.
+
+    Schema migrations are managed by Alembic (``alembic upgrade head``).
+    This function only checks the connection is usable at startup.
+    """
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            __import__("sqlalchemy").text("SELECT 1")
+        )
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
@@ -70,6 +76,23 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 @contextmanager
 def get_sync_db() -> Generator[Session, None, None]:
     """Context manager for getting sync database session (for Celery tasks)."""
+    session = sync_session_maker()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def get_sync_db_dep() -> Generator[Session, None, None]:
+    """FastAPI dependency for sync DB session.
+
+    Some route modules still use sync SQLAlchemy ORM patterns (`db.query(...)`).
+    This dependency keeps them functional while the async migration is phased in.
+    """
     session = sync_session_maker()
     try:
         yield session

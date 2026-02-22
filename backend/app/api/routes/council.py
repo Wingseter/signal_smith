@@ -14,6 +14,8 @@ from pydantic import BaseModel
 
 from app.services.news import news_trader, news_monitor
 from app.services.council import council_orchestrator, CouncilMeeting, InvestmentSignal
+from app.services.trading_service import trading_service
+from app.core.websocket import BaseConnectionManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["AI Council"])
@@ -25,7 +27,7 @@ class CouncilConfig(BaseModel):
     """회의 설정"""
     council_threshold: int = 7
     sell_threshold: int = 3
-    auto_execute: bool = False
+    auto_execute: bool = True
     max_position_per_stock: int = 500000
     poll_interval: int = 60
 
@@ -43,40 +45,7 @@ class ManualMeetingRequest(BaseModel):
     news_score: int = 8
 
 
-# ============ WebSocket Manager ============
-
-class ConnectionManager:
-    """WebSocket 연결 관리"""
-
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"WebSocket 연결: {len(self.active_connections)}개 활성")
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        logger.info(f"WebSocket 해제: {len(self.active_connections)}개 활성")
-
-    async def broadcast(self, message: dict):
-        """모든 연결에 메시지 브로드캐스트"""
-        disconnected = []
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception as e:
-                logger.error(f"브로드캐스트 오류: {e}")
-                disconnected.append(connection)
-
-        # 끊어진 연결 제거
-        for conn in disconnected:
-            self.disconnect(conn)
-
-
-manager = ConnectionManager()
+manager = BaseConnectionManager("council")
 
 
 # ============ 회의 콜백 등록 ============
@@ -417,6 +386,130 @@ async def get_queued_executions():
         "signals": [s.to_dict() for s in signals],
         "total": len(signals),
     }
+
+
+@router.get("/account/realized-pnl")
+async def get_realized_pnl(period: str = Query(default="1m")):
+    """실현 수익 조회 (키움 ka10073)
+
+    Args:
+        period: 조회 기간 (1w=1주, 1m=1개월, 3m=3개월)
+    """
+    import json
+    from datetime import datetime, timedelta
+    from app.core.redis import get_redis
+    from app.services.kiwoom.rest_client import kiwoom_client
+
+    # period → 날짜 변환
+    end_date = datetime.now().strftime("%Y%m%d")
+    if period == "1w":
+        start_date = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
+    elif period == "3m":
+        start_date = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+    else:  # 1m 기본값
+        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+
+    # Redis 60초 캐시
+    cache_key = f"account:realized_pnl:{period}"
+    try:
+        redis = await get_redis()
+        cached = await redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    items = await kiwoom_client.get_realized_pnl(start_date=start_date, end_date=end_date)
+
+    total_profit_loss = sum(i.profit_loss for i in items)
+    total_commission = sum(i.commission for i in items)
+    total_tax = sum(i.tax for i in items)
+
+    result = {
+        "items": [
+            {
+                "date": i.date,
+                "symbol": i.symbol,
+                "name": i.name,
+                "quantity": i.quantity,
+                "buy_price": i.buy_price,
+                "sell_price": i.sell_price,
+                "profit_loss": i.profit_loss,
+                "profit_rate": i.profit_rate,
+                "commission": i.commission,
+                "tax": i.tax,
+            }
+            for i in items
+        ],
+        "summary": {
+            "total_profit_loss": total_profit_loss,
+            "total_commission": total_commission,
+            "total_tax": total_tax,
+            "net_profit": total_profit_loss - total_commission - total_tax,
+            "trade_count": len(items),
+        },
+    }
+
+    try:
+        redis = await get_redis()
+        await redis.set(cache_key, json.dumps(result), ex=60)
+    except Exception:
+        pass
+
+    return result
+
+
+@router.get("/account/balance")
+async def get_account_balance():
+    """키움 계좌 잔고 조회"""
+    summary = await _get_account_summary()
+    return summary["balance"]
+
+
+@router.get("/account/holdings")
+async def get_account_holdings():
+    """키움 보유종목 조회"""
+    summary = await _get_account_summary()
+    return {"holdings": summary["holdings"], "count": len(summary["holdings"])}
+
+
+@router.get("/account/summary")
+async def get_account_summary():
+    """계좌 잔고 + 보유종목 통합 조회 (캐시 적용)"""
+    return await _get_account_summary()
+
+
+async def _get_account_summary() -> dict:
+    """계좌 정보 통합 조회 (10초 Redis 캐시)"""
+    import json
+    from app.core.redis import get_redis
+
+    cache_key = "account:summary"
+    try:
+        redis = await get_redis()
+        cached = await redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    # 키움 API 순차 호출 (동시 호출 시 토큰 경쟁 방지)
+    balance = await trading_service.get_account_balance()
+    holdings = await trading_service.get_holdings()
+
+    result = {
+        "balance": balance,
+        "holdings": holdings,
+        "count": len(holdings),
+    }
+
+    try:
+        redis = await get_redis()
+        await redis.set(cache_key, json.dumps(result), ex=10)
+    except Exception:
+        pass
+
+    return result
 
 
 @router.post("/process-queue")

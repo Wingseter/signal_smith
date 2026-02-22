@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from jose import JWTError, jwt
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -37,19 +39,11 @@ def create_access_token(
 ) -> str:
     """Create JWT access token."""
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(
-            minutes=settings.access_token_expire_minutes
-        )
-    to_encode.update({"exp": expire, "type": "access"})
-    encoded_jwt = jwt.encode(
-        to_encode,
-        settings.secret_key,
-        algorithm=settings.algorithm,
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
     )
-    return encoded_jwt
+    to_encode.update({"exp": expire, "type": "access"})
+    return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
 def create_refresh_token(
@@ -58,47 +52,53 @@ def create_refresh_token(
 ) -> str:
     """Create JWT refresh token."""
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(
-            days=settings.refresh_token_expire_days
-        )
-    to_encode.update({"exp": expire, "type": "refresh"})
-    encoded_jwt = jwt.encode(
-        to_encode,
-        settings.secret_key,
-        algorithm=settings.algorithm,
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(days=settings.refresh_token_expire_days)
     )
-    return encoded_jwt
+    to_encode.update({"exp": expire, "type": "refresh"})
+    return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
-def decode_token(token: str) -> Optional[TokenData]:
-    """Decode and validate JWT token."""
+def decode_token(token: str, expected_type: str = "access") -> Optional[TokenData]:
+    """Decode and validate JWT token.
+
+    Args:
+        token: The JWT token string.
+        expected_type: Expected token type ("access" or "refresh").
+            Prevents refresh tokens from being used as access tokens.
+    """
     try:
         payload = jwt.decode(
             token,
             settings.secret_key,
             algorithms=[settings.algorithm],
         )
-        user_id: int = payload.get("sub")
+        # Validate token type
+        token_type = payload.get("type")
+        if token_type != expected_type:
+            logger.warning(
+                "Token type mismatch: expected=%s, got=%s", expected_type, token_type
+            )
+            return None
+
+        user_id_raw = payload.get("sub")
+        user_id = int(user_id_raw) if user_id_raw is not None else None
         email: str = payload.get("email")
         if user_id is None:
             return None
         return TokenData(user_id=user_id, email=email)
-    except JWTError:
+    except JWTError as exc:
+        logger.warning("JWT decode error: %s", exc)
+        return None
+    except (ValueError, TypeError) as exc:
+        logger.warning("Token payload error: %s", exc)
         return None
 
 
 def create_tokens(user_id: int, email: str) -> Token:
     """Create access and refresh tokens."""
-    access_token = create_access_token(
-        data={"sub": str(user_id), "email": email}
-    )
-    refresh_token = create_refresh_token(
-        data={"sub": str(user_id), "email": email}
-    )
+    data = {"sub": str(user_id), "email": email}
     return Token(
-        access_token=access_token,
-        refresh_token=refresh_token,
+        access_token=create_access_token(data),
+        refresh_token=create_refresh_token(data),
     )

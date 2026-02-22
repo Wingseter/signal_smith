@@ -294,6 +294,10 @@ export default function TradingSignals() {
       } else if (data.type === 'signal_executed') {
         queryClient.invalidateQueries({ queryKey: ['signals'] });
         queryClient.invalidateQueries({ queryKey: ['account'] });
+      } else if (data.type === 'trading') {
+        queryClient.invalidateQueries({ queryKey: ['signals'] });
+        queryClient.invalidateQueries({ queryKey: ['account'] });
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
       }
     };
 
@@ -532,7 +536,15 @@ export default function TradingSignals() {
                     <div className="flex items-center space-x-4 mt-3 text-xs text-gray-500">
                       <span>신호 강도: {signal.strength}%</span>
                       <span>신뢰도: {signal.confidence}%</span>
-                      <span>출처: {signal.source_agent}</span>
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                        signal.source_agent === 'news'
+                          ? 'bg-blue-100 text-blue-700'
+                          : signal.source_agent === 'quant'
+                          ? 'bg-purple-100 text-purple-700'
+                          : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {signal.source_agent === 'news' ? '📰 뉴스' : signal.source_agent === 'quant' ? '📊 퀀트' : signal.source_agent}
+                      </span>
                       <span>{formatTimeAgo(signal.created_at)}</span>
                     </div>
                   </div>

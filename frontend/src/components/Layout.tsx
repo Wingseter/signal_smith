@@ -12,6 +12,7 @@ const navItems = [
   { path: '/news-monitor', label: 'News', icon: '📰', description: '뉴스 모니터링' },
   { path: '/analysis', label: 'Analysis', icon: '🔍', description: 'AI 종합 분석' },
   { path: '/signals', label: 'Signals', icon: '📡', description: '투자 시그널' },
+  { path: '/quant-signals', label: 'Quant', icon: '🔬', description: '퀀트 시그널' },
   { path: '/portfolio', label: 'Portfolio', icon: '💼', description: '포트폴리오' },
   { path: '/trading', label: 'Trading', icon: '💹', description: '자동매매' },
   { path: '/backtest', label: 'Backtest', icon: '⏱️', description: '전략 검증' },
@@ -72,105 +73,6 @@ function AIStatusIndicator() {
   );
 }
 
-// 트리거 알림 모달
-function TriggerAlertModal() {
-  const navigate = useNavigate();
-  const { latestTrigger, showTriggerModal, dismissLatestTrigger, markAsRead } = useCouncilStore();
-
-  if (!showTriggerModal || !latestTrigger) return null;
-
-  const handleGoToCouncil = () => {
-    markAsRead();
-    dismissLatestTrigger();
-    navigate('/council');
-  };
-
-  const getTypeLabel = (type: string) => {
-    switch (type) {
-      case 'news_trigger':
-        return { label: '🔔 중요 뉴스 감지', color: 'text-blue-600' };
-      case 'meeting_started':
-        return { label: '🏛️ AI 회의 시작', color: 'text-purple-600' };
-      case 'signal_created':
-        return { label: '📡 새 시그널 생성', color: 'text-green-600' };
-      case 'signal_approved':
-        return { label: '✅ 시그널 승인됨', color: 'text-emerald-600' };
-      default:
-        return { label: '📌 알림', color: 'text-gray-600' };
-    }
-  };
-
-  const typeInfo = getTypeLabel(latestTrigger.type);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4">
-      {/* 배경 오버레이 */}
-      <div
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-        onClick={dismissLatestTrigger}
-      />
-
-      {/* 알림 카드 */}
-      <div className="relative bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-slide-down">
-        {/* 헤더 */}
-        <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 p-4">
-          <div className="flex items-center justify-between">
-            <span className={`text-lg font-bold text-white`}>{typeInfo.label}</span>
-            <button
-              onClick={dismissLatestTrigger}
-              className="text-white/80 hover:text-white text-xl"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-
-        {/* 본문 */}
-        <div className="p-5">
-          <div className="flex items-start space-x-3 mb-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center text-white text-xl">
-              🤖
-            </div>
-            <div className="flex-1">
-              <h3 className="font-bold text-gray-900 text-lg">{latestTrigger.company_name}</h3>
-              <span className="text-sm text-gray-500">{latestTrigger.symbol}</span>
-            </div>
-            <div className="text-right">
-              <div className="flex items-center space-x-1">
-                <span className="text-yellow-500">{'⭐'.repeat(Math.min(Math.round(latestTrigger.news_score / 2), 5))}</span>
-              </div>
-              <span className="text-xs text-gray-400">{latestTrigger.news_score}/10</span>
-            </div>
-          </div>
-
-          <p className="text-gray-700 text-sm mb-4 line-clamp-2">{latestTrigger.news_title}</p>
-
-          <div className="bg-indigo-50 rounded-xl p-4 mb-4">
-            <p className="text-indigo-800 text-sm">
-              <span className="font-bold">🤖 AI Council</span>이 이 뉴스를 분석하여 투자 회의를 진행합니다.
-              실시간으로 Gemini, GPT, Claude의 토론을 확인하세요.
-            </p>
-          </div>
-
-          <div className="flex space-x-3">
-            <button
-              onClick={handleGoToCouncil}
-              className="flex-1 px-4 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl font-bold hover:from-indigo-600 hover:to-purple-700 transition-all shadow-lg hover:shadow-xl"
-            >
-              🏛️ AI Council로 이동
-            </button>
-            <button
-              onClick={dismissLatestTrigger}
-              className="px-4 py-3 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200 transition-all"
-            >
-              나중에
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // 트리거 히스토리 드롭다운
 function TriggerHistoryDropdown() {
@@ -412,8 +314,7 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* 트리거 알림 모달 */}
-      <TriggerAlertModal />
+      {/* 트리거 알림 모달 - 제거됨 (전체화면 알림 비활성화) */}
 
       {/* Header */}
       <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-40">

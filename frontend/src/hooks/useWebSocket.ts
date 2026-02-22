@@ -22,7 +22,7 @@ interface WebSocketHookReturn {
 }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const WS_BASE_URL = API_BASE_URL.replace('http', 'ws');
+const WS_BASE_URL = import.meta.env.VITE_WS_URL || API_BASE_URL.replace(/^http/, 'ws');
 
 export function useWebSocket(
   endpoint: string,
@@ -163,7 +163,7 @@ export function useMarketWebSocket({ symbols, onPriceUpdate }: UseMarketWebSocke
 
   const handleMessage = useCallback((data: unknown) => {
     const message = data as { type: string; data?: MarketData };
-    if (message.type === 'price_update' && message.data) {
+    if ((message.type === 'price_update' || message.type === 'price') && message.data) {
       onPriceUpdate?.(message.data);
       // Update query cache
       queryClient.setQueryData(['price', message.data.symbol], message.data);
@@ -221,11 +221,12 @@ export function useAnalysisWebSocket({ symbol, onAnalysisUpdate }: UseAnalysisWe
   const queryClient = useQueryClient();
 
   const handleMessage = useCallback((data: unknown) => {
-    const message = data as { type: string; symbol?: string; data?: AnalysisUpdate };
-    if (message.type === 'analysis_update' && message.data) {
+    const message = data as { type: string; symbol?: string; data?: AnalysisUpdate & { symbol?: string } };
+    if ((message.type === 'analysis_update' || message.type === 'analysis') && message.data) {
       onAnalysisUpdate?.(message.data);
       // Invalidate related queries
-      queryClient.invalidateQueries({ queryKey: ['analysis', message.symbol] });
+      const symbolKey = message.symbol || message.data.symbol;
+      queryClient.invalidateQueries({ queryKey: symbolKey ? ['analysis', symbolKey] : ['analysis'] });
     }
   }, [onAnalysisUpdate, queryClient]);
 

@@ -82,6 +82,21 @@ class Holding:
     profit_rate: float
 
 
+@dataclass
+class RealizedPnlItem:
+    """일자별 종목별 실현손익"""
+    date: str           # dt
+    symbol: str         # stk_cd
+    name: str           # stk_nm
+    quantity: int        # cntr_qty (체결수량)
+    buy_price: int       # buy_uv (매입단가)
+    sell_price: int      # cntr_pric (체결가)
+    profit_loss: int     # tdy_sel_pl (당일매도손익)
+    profit_rate: float   # pl_rt (손익률)
+    commission: int      # tdy_trde_cmsn (당일매매수수료)
+    tax: int             # tdy_trde_tax (당일매매세금)
+
+
 class KiwoomBaseClient(ABC):
     """키움증권 API 기본 인터페이스"""
 

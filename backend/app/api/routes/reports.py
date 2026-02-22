@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_sync_db_dep
 from app.api.routes.auth import get_current_user
 from app.models.user import User
 from app.models.stock import Stock, StockPrice
@@ -88,7 +88,7 @@ async def get_report_types(
 @router.post("/stock")
 async def generate_stock_report(
     request: StockReportRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ):
     """Generate stock analysis PDF report."""
@@ -128,9 +128,9 @@ async def generate_stock_report(
         price_change_pct=price_change_pct,
         volume=int(latest_price.volume) if latest_price else 0,
         market_cap=float(stock.market_cap) if stock.market_cap else 0,
-        pe_ratio=float(stock.pe_ratio) if stock.pe_ratio else None,
-        pb_ratio=float(stock.pb_ratio) if stock.pb_ratio else None,
-        dividend_yield=float(stock.dividend_yield) if stock.dividend_yield else None,
+        pe_ratio=None,
+        pb_ratio=None,
+        dividend_yield=None,
         technical_score=75.0,  # Would come from analysis service
         fundamental_score=68.0,
         sentiment_score=72.0,
@@ -175,7 +175,7 @@ async def generate_stock_report(
 @router.post("/portfolio")
 async def generate_portfolio_report(
     request: PortfolioReportRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ):
     """Generate portfolio review PDF report."""
@@ -203,7 +203,7 @@ async def generate_portfolio_report(
     positions = db.query(Position).filter(Position.portfolio_id == portfolio.id).all()
 
     # Calculate portfolio metrics
-    total_value = float(portfolio.cash_balance)
+    total_value = 0.0
     total_cost = 0.0
     position_list = []
     sector_allocation = {}
@@ -217,9 +217,9 @@ async def generate_portfolio_report(
             .first()
         )
 
-        current_price = float(latest_price.close) if latest_price else float(pos.avg_cost)
+        current_price = float(latest_price.close) if latest_price else float(pos.avg_buy_price)
         position_value = current_price * pos.quantity
-        position_cost = float(pos.avg_cost) * pos.quantity
+        position_cost = float(pos.avg_buy_price) * pos.quantity
 
         total_value += position_value
         total_cost += position_cost
@@ -237,7 +237,7 @@ async def generate_portfolio_report(
             "symbol": pos.symbol,
             "name": stock.name if stock else pos.symbol,
             "quantity": pos.quantity,
-            "avg_cost": float(pos.avg_cost),
+            "avg_cost": float(pos.avg_buy_price),
             "current_price": current_price,
             "unrealized_pnl": position_value - position_cost,
             "weight": 0,  # Will calculate after total
@@ -261,7 +261,7 @@ async def generate_portfolio_report(
         total_cost=total_cost,
         total_pnl=total_pnl,
         total_pnl_pct=total_pnl_pct,
-        cash_balance=float(portfolio.cash_balance),
+        cash_balance=0.0,
         positions=position_list,
         sector_allocation=sector_allocation,
         risk_metrics={
@@ -299,7 +299,7 @@ async def generate_portfolio_report(
 @router.post("/trading")
 async def generate_trading_report(
     request: TradingReportRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ):
     """Generate trading summary PDF report."""
@@ -321,7 +321,6 @@ async def generate_trading_report(
     signals = (
         db.query(TradingSignal)
         .filter(
-            TradingSignal.user_id == current_user.id,
             TradingSignal.created_at >= start_date,
         )
         .all()
@@ -337,7 +336,7 @@ async def generate_trading_report(
     trade_list = []
 
     for trade in trades:
-        pnl = float(trade.realized_pnl) if trade.realized_pnl else 0
+        pnl = 0.0
 
         if pnl > 0:
             winning_trades += 1
@@ -351,7 +350,7 @@ async def generate_trading_report(
         trade_list.append({
             "date": trade.created_at,
             "symbol": trade.symbol,
-            "type": trade.trade_type,
+            "type": trade.transaction_type,
             "quantity": trade.quantity,
             "price": float(trade.price),
             "pnl": pnl,
@@ -363,7 +362,7 @@ async def generate_trading_report(
     largest_win = max(profits) if profits else 0
     largest_loss = min(losses) if losses else 0
 
-    signals_executed = len([s for s in signals if s.executed])
+    signals_executed = len([s for s in signals if s.is_executed])
 
     # Build trading summary data
     trading_data = TradingSummaryData(
@@ -407,7 +406,7 @@ async def generate_trading_report(
 @router.post("/market")
 async def generate_market_report(
     request: MarketReportRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ):
     """Generate market overview PDF report."""

@@ -15,6 +15,7 @@ class SignalStatus(str, Enum):
     EXECUTED = "executed"        # 체결됨
     EXPIRED = "expired"          # 만료됨
     AUTO_EXECUTED = "auto_executed"  # 자동 체결됨
+    QUEUED = "queued"            # 자동매매 구매 대기 (거래시간 외)
 
 
 class AnalystRole(str, Enum):
@@ -107,8 +108,9 @@ class CouncilMeeting:
     # 회의 대상
     symbol: str = ""
     company_name: str = ""
-    news_title: str = ""                 # 트리거 뉴스
+    news_title: str = ""                 # 트리거 뉴스/퀀트 설명
     news_score: int = 0                  # Gemini 뉴스 점수
+    trigger_source: str = "news"         # 트리거 소스: "news" | "quant"
 
     # 회의 진행
     messages: List[CouncilMessage] = field(default_factory=list)
@@ -184,6 +186,7 @@ class CouncilMeeting:
             "company_name": self.company_name,
             "news_title": self.news_title,
             "news_score": self.news_score,
+            "trigger_source": self.trigger_source,
             "messages": [m.to_dict() for m in self.messages],
             "current_round": self.current_round,
             "max_rounds": self.max_rounds,

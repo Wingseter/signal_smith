@@ -5,6 +5,7 @@ import { tradingApi, analysisApi, stocksApi, councilApi } from '../../services/a
 import { useMarketWebSocket, useTradingWebSocket } from '../../hooks';
 import { useCouncilStore } from '../../store/councilStore';
 import StockChart from '../Charts/StockChart';
+import { RealizedPnlPanel } from '../Council/RealizedPnlPanel';
 
 interface Signal {
   id: number;
@@ -659,6 +660,9 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* 실현 수익 */}
+      <RealizedPnlPanel />
 
       {/* AI 분석가 소개 */}
       <AIAnalystShowcase />

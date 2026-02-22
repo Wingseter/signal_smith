@@ -64,6 +64,8 @@ class TradingSignal(Base):
     reason: Mapped[str] = mapped_column(String(1000))
     target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2), nullable=True)
     stop_loss: Mapped[Optional[Decimal]] = mapped_column(Numeric(15, 2), nullable=True)
+    quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 주문 수량
+    signal_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # pending/queued/auto_executed
     is_executed: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

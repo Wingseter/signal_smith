@@ -48,8 +48,8 @@ class TradingService:
             symbol: 종목 코드
             side: 'buy' 또는 'sell'
             quantity: 수량
-            price: 가격 (시장가 주문시 0)
-            order_type: 'limit', 'market' 등
+            price: 가격 (0일 경우 현재가 조회 후 지정가 주문으로 자동 변환)
+            order_type: 'limit', 'market' 등 (가격이 0이면 강제로 limit 최적화 실행)
 
         Returns:
             주문 결과
@@ -60,6 +60,22 @@ class TradingService:
                 "error": "Trading is disabled",
                 "message": "자동 매매가 비활성화되어 있습니다.",
             }
+
+        # 가격이 0이거나 시장가 주문인 경우 현재가를 조회하여 지정가로 최적화
+        if price == 0 or order_type == "market":
+            stock_info = await self.kiwoom.get_stock_price(symbol)
+            if not stock_info or stock_info.current_price == 0:
+                return {
+                    "success": False,
+                    "error": "Price fetch failed",
+                    "message": "현재가를 조회하지 못해 주문을 진행할 수 없습니다.",
+                }
+            # 슬리피지를 방지하기 위해 현재가로 지정가 매매 수행
+            price = stock_info.current_price
+            order_type = "limit"
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"[{symbol}] 시장가 대안으로 현재가({price:,}원) 지정가 주문 전환 ('{side}')")
 
         # 포지션 크기 검증
         if side == "buy":
@@ -244,7 +260,7 @@ class TradingService:
                 {
                     "id": t.id,
                     "symbol": t.symbol,
-                    "type": t.transaction_type,
+                    "transaction_type": t.transaction_type,
                     "quantity": t.quantity,
                     "price": float(t.price),
                     "total_amount": float(t.total_amount),
@@ -267,6 +283,8 @@ class TradingService:
         reason: str,
         target_price: Optional[float] = None,
         stop_loss: Optional[float] = None,
+        quantity: Optional[int] = None,
+        signal_status: Optional[str] = None,
     ) -> int:
         """AI 트레이딩 시그널 생성"""
         async with async_session_maker() as session:
@@ -278,6 +296,8 @@ class TradingService:
                 reason=reason,
                 target_price=Decimal(str(target_price)) if target_price else None,
                 stop_loss=Decimal(str(stop_loss)) if stop_loss else None,
+                quantity=quantity,
+                signal_status=signal_status,
             )
             session.add(signal)
             await session.commit()
@@ -346,6 +366,8 @@ class TradingService:
                     "reason": s.reason,
                     "target_price": float(s.target_price) if s.target_price else None,
                     "stop_loss": float(s.stop_loss) if s.stop_loss else None,
+                    "quantity": s.quantity,
+                    "signal_status": s.signal_status,
                     "created_at": s.created_at.isoformat(),
                 }
                 for s in signals

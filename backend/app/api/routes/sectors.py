@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_sync_db_dep
 from app.api.routes.auth import get_current_user
 from app.models.user import User
 from app.models.stock import Stock, StockPrice
@@ -95,7 +95,7 @@ class ThemeDetailResponse(BaseModel):
 
 @router.get("/list")
 async def list_sectors(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Get list of all sectors with basic info."""
@@ -112,7 +112,7 @@ async def list_sectors(
 
 @router.get("/performance", response_model=List[SectorResponse])
 async def get_sector_performance(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> List[SectorResponse]:
     """
@@ -154,7 +154,7 @@ async def get_sector_performance(
 @router.get("/sector/{sector_id}", response_model=SectorDetailResponse)
 async def get_sector_detail(
     sector_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> SectorDetailResponse:
     """
@@ -218,7 +218,7 @@ async def get_sector_detail(
 @router.get("/themes", response_model=List[ThemeResponse])
 async def get_themes_performance(
     hot_only: bool = False,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> List[ThemeResponse]:
     """
@@ -260,7 +260,7 @@ async def get_themes_performance(
 @router.get("/theme/{theme_id}", response_model=ThemeDetailResponse)
 async def get_theme_detail(
     theme_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> ThemeDetailResponse:
     """
@@ -320,7 +320,7 @@ async def get_theme_detail(
 
 @router.get("/rotation")
 async def detect_rotation_signal(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> RotationSignalResponse:
     """
@@ -368,7 +368,7 @@ async def detect_rotation_signal(
 @router.get("/recommended")
 async def get_recommended_sectors(
     cycle_phase: Optional[str] = None,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -412,7 +412,7 @@ async def get_recommended_sectors(
 @router.get("/correlation")
 async def get_sector_correlation(
     period_days: int = Query(60, ge=20, le=252),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -451,7 +451,7 @@ async def get_sector_correlation(
 @router.get("/search")
 async def search_by_keyword(
     keyword: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -469,7 +469,7 @@ async def search_by_keyword(
 
 @router.get("/heatmap")
 async def get_sector_heatmap(
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """

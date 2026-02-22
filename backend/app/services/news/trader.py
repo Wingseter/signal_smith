@@ -29,7 +29,7 @@ class TradingConfig:
     cooldown_minutes: int = 30               # 같은 종목 재매매 대기 시간
     require_symbol: bool = True              # 종목코드 필수 (True: 종목코드 없으면 회의 안 함)
     min_confidence: float = 0.6              # 최소 신뢰도
-    auto_execute: bool = False               # 자동 체결 (False면 승인 필요)
+    auto_execute: bool = True                # 자동 체결 (기본 ON)
     analyze_all_news: bool = True            # 모든 뉴스 분석 (트리거 키워드 무시)
 
 
@@ -179,20 +179,65 @@ class NewsTrader:
             self._daily_trade_count += 1
 
         elif analysis.score <= self.config.sell_threshold:
-            # 매도 신호 (회의 없이 바로)
             logger.info(f"📉 매도 신호: {company_name} (점수: {analysis.score})")
+            council = self._get_council()
+            try:
+                from app.services.kiwoom.rest_client import kiwoom_client
 
-            record = TradeRecord(
-                symbol=symbol,
-                company_name=company_name,
-                action="SELL_SIGNAL",
-                score=analysis.score,
-                reason=analysis.analysis_reason,
-                news_title=article.title,
-                executed_at=datetime.now(),
-                success=True,
-            )
-            self._trade_history.append(record)
+                if not await kiwoom_client.is_connected():
+                    await kiwoom_client.connect()
+                holdings = await kiwoom_client.get_holdings()
+                held = next((h for h in holdings if h.symbol == symbol), None)
+
+                if held:
+                    meeting = await council.start_sell_meeting(
+                        symbol=symbol,
+                        company_name=company_name,
+                        sell_reason=f"부정적 뉴스 (점수: {analysis.score}/10): {article.title[:80]}",
+                        current_holdings=held.quantity,
+                        avg_buy_price=held.avg_price,
+                        current_price=held.current_price,
+                    )
+                    record = TradeRecord(
+                        symbol=symbol,
+                        company_name=company_name,
+                        action="SELL_COUNCIL",
+                        score=analysis.score,
+                        reason="부정 뉴스 매도 회의",
+                        news_title=article.title,
+                        executed_at=datetime.now(),
+                        meeting_id=meeting.id if meeting else None,
+                        success=True,
+                    )
+                    self._trade_history.append(record)
+                    self._recent_trades[symbol] = datetime.now()
+                    self._daily_trade_count += 1
+                else:
+                    record = TradeRecord(
+                        symbol=symbol,
+                        company_name=company_name,
+                        action="SELL_SIGNAL",
+                        score=analysis.score,
+                        reason=analysis.analysis_reason,
+                        news_title=article.title,
+                        executed_at=datetime.now(),
+                        success=True,
+                    )
+                    self._trade_history.append(record)
+            except Exception as e:
+                logger.error(f"매도 신호 처리 오류: {symbol} - {e}")
+                record = TradeRecord(
+                    symbol=symbol,
+                    company_name=company_name,
+                    action="SELL_SIGNAL",
+                    score=analysis.score,
+                    reason=analysis.analysis_reason,
+                    news_title=article.title,
+                    executed_at=datetime.now(),
+                    success=False,
+                    error_message=str(e),
+                )
+                self._trade_history.append(record)
 
         else:
             logger.debug(

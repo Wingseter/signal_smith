@@ -21,9 +21,10 @@ from .models import (
 from .quant_analyst import quant_analyst
 from .fundamental_analyst import fundamental_analyst
 from .technical_indicators import technical_calculator, TechnicalAnalysisResult
-from .dart_client import dart_client, FinancialData
+from app.services.dart_client import dart_client, FinancialData
 from .trading_hours import trading_hours, MarketSession, get_kst_now
 from .cost_manager import cost_manager, AnalysisDepth
+from app.services.trading_service import trading_service
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ class CouncilOrchestrator:
         self._meeting_callbacks: List[Callable[[CouncilMeeting], Awaitable[None]]] = []
 
         # 설정
-        self.auto_execute = False          # 자동 체결 여부
+        self.auto_execute = True           # 자동 체결 여부 (기본 ON)
         self.min_confidence = 0.6          # 최소 신뢰도
         self.meeting_trigger_score = 7     # 회의 소집 기준 점수
         self.respect_trading_hours = True  # 거래 시간 존중 여부
@@ -141,6 +142,7 @@ class CouncilOrchestrator:
         news_score: int,
         available_amount: int = 1000000,
         current_price: int = 0,
+        trigger_source: str = "news",
     ) -> CouncilMeeting:
         """AI 투자 회의 시작"""
 
@@ -150,6 +152,7 @@ class CouncilOrchestrator:
             company_name=company_name,
             news_title=news_title,
             news_score=news_score,
+            trigger_source=trigger_source,
         )
 
         # 0. 키움증권에서 실제 차트 데이터 조회
@@ -193,84 +196,159 @@ class CouncilOrchestrator:
         meeting.current_round = 1
 
         # GPT 퀀트 분석 (실제 차트 데이터 전달)
-        quant_msg = await quant_analyst.analyze(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            technical_data=technical_data,  # 실제 차트 데이터 전달
-        )
-        meeting.add_message(quant_msg)
-        await self._notify_meeting_update(meeting)
+        try:
+            quant_msg = await asyncio.wait_for(
+                quant_analyst.analyze(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    technical_data=technical_data,  # 실제 차트 데이터 전달
+                ),
+                timeout=15.0  # 타임아웃 15초 강제
+            )
+            meeting.add_message(quant_msg)
+            await self._notify_meeting_update(meeting)
 
-        quant_percent = quant_msg.data.get("suggested_percent", 0) if quant_msg.data else 0
-        quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5
+            quant_percent = quant_msg.data.get("suggested_percent", 0) if quant_msg.data else 0
+            quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"퀀트 분석가 API 호출 실패 또는 타임아웃: {e}")
+            # Fallback 로직: 기본값 할당 및 에러 메시지 생성
+            quant_msg = CouncilMessage(
+                role=AnalystRole.QUANT,
+                speaker="시스템",
+                content="[시스템 경고] 퀀트 분석가 API 응답 지연으로 기본 판단을 적용합니다. 차트 및 기술적 지표 단독 결정에 유의하세요.",
+                data={"suggested_percent": 0, "score": 5}
+            )
+            meeting.add_message(quant_msg)
+            await self._notify_meeting_update(meeting)
+            quant_percent = 0
+            quant_score = 5
 
         # Claude 펀더멘털 분석 (DART 실제 재무제표 전달)
-        fundamental_msg = await fundamental_analyst.analyze(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            financial_data=financial_data,  # DART 재무제표 데이터 전달
-        )
-        meeting.add_message(fundamental_msg)
-        await self._notify_meeting_update(meeting)
+        try:
+            fundamental_msg = await asyncio.wait_for(
+                fundamental_analyst.analyze(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    financial_data=financial_data,  # DART 재무제표 데이터 전달
+                ),
+                timeout=15.0  # 타임아웃 15초 강제
+            )
+            meeting.add_message(fundamental_msg)
+            await self._notify_meeting_update(meeting)
 
-        fundamental_percent = fundamental_msg.data.get("suggested_percent", 0) if fundamental_msg.data else 0
-        fundamental_score = fundamental_msg.data.get("score", 5) if fundamental_msg.data else 5
+            fundamental_percent = fundamental_msg.data.get("suggested_percent", 0) if fundamental_msg.data else 0
+            fundamental_score = fundamental_msg.data.get("score", 5) if fundamental_msg.data else 5
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"기본적 분석가 API 호출 실패 또는 타임아웃: {e}")
+            # Fallback 로직: 기본값 할당 및 에러 메시지 생성
+            fundamental_msg = CouncilMessage(
+                role=AnalystRole.FUNDAMENTAL,
+                speaker="시스템",
+                content="[시스템 경고] 기본적 분석가 API 응답 지연으로 기본 판단을 적용합니다. 재무 데이터 단독 결정에 유의하세요.",
+                data={"suggested_percent": 0, "score": 5}
+            )
+            meeting.add_message(fundamental_msg)
+            await self._notify_meeting_update(meeting)
+            fundamental_percent = 0
+            fundamental_score = 5
 
         # 3. 라운드 2: 상호 검토 및 조정
         meeting.current_round = 2
 
         # GPT가 Claude 의견에 응답 (차트 데이터 유지)
-        quant_response = await quant_analyst.respond_to(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            other_analysis=fundamental_msg.content,
-            technical_data=technical_data,  # 실제 차트 데이터 전달
-        )
-        meeting.add_message(quant_response)
-        await self._notify_meeting_update(meeting)
+        try:
+            quant_response = await asyncio.wait_for(
+                quant_analyst.respond_to(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    other_analysis=fundamental_msg.content,
+                    technical_data=technical_data,  # 실제 차트 데이터 전달
+                ),
+                timeout=15.0  # 타임아웃 강제
+            )
+            meeting.add_message(quant_response)
+            await self._notify_meeting_update(meeting)
 
-        # 업데이트된 퀀트 제안
-        if quant_response.data and "suggested_percent" in quant_response.data:
-            quant_percent = quant_response.data["suggested_percent"]
+            # 업데이트된 퀀트 제안
+            if quant_response.data and "suggested_percent" in quant_response.data:
+                quant_percent = quant_response.data["suggested_percent"]
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"퀀트 응답 API 호출 실패 또는 타임아웃: {e}")
+            quant_response = CouncilMessage(
+                role=AnalystRole.QUANT,
+                speaker="시스템",
+                content="[시스템 경고] 퀀트 분석가 상호 검토 응답 지연으로 기존 의견을 유지합니다.",
+                data={"suggested_percent": quant_percent, "score": quant_score}
+            )
+            meeting.add_message(quant_response)
 
         # Claude가 GPT 응답에 응답
-        fundamental_response = await fundamental_analyst.respond_to(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            other_analysis=quant_response.content,
-        )
-        meeting.add_message(fundamental_response)
-        await self._notify_meeting_update(meeting)
+        try:
+            fundamental_response = await asyncio.wait_for(
+                fundamental_analyst.respond_to(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    other_analysis=quant_response.content,
+                ),
+                timeout=15.0  # 타임아웃 강제
+            )
+            meeting.add_message(fundamental_response)
+            await self._notify_meeting_update(meeting)
 
-        # 업데이트된 펀더멘털 제안
-        if fundamental_response.data and "suggested_percent" in fundamental_response.data:
-            fundamental_percent = fundamental_response.data["suggested_percent"]
+            # 업데이트된 펀더멘털 제안
+            if fundamental_response.data and "suggested_percent" in fundamental_response.data:
+                fundamental_percent = fundamental_response.data["suggested_percent"]
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"기본적 응답 API 호출 실패 또는 타임아웃: {e}")
+            fundamental_response = CouncilMessage(
+                role=AnalystRole.FUNDAMENTAL,
+                speaker="시스템",
+                content="[시스템 경고] 기본적 분석가 상호 검토 응답 지연으로 기존 의견을 유지합니다.",
+                data={"suggested_percent": fundamental_percent, "score": fundamental_score}
+            )
+            meeting.add_message(fundamental_response)
 
         # 4. 라운드 3: 합의 도출
         meeting.current_round = 3
 
         # 최종 합의안
-        consensus_msg = await fundamental_analyst.propose_consensus(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            quant_percent=quant_percent,
-            fundamental_percent=fundamental_percent,
-        )
-        meeting.add_message(consensus_msg)
-        await self._notify_meeting_update(meeting)
+        try:
+            consensus_msg = await asyncio.wait_for(
+                fundamental_analyst.propose_consensus(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    quant_percent=quant_percent,
+                    fundamental_percent=fundamental_percent,
+                ),
+                timeout=15.0  # 타임아웃 강제
+            )
+            meeting.add_message(consensus_msg)
+            await self._notify_meeting_update(meeting)
 
-        # 최종 투자 비율 결정
-        final_percent = consensus_msg.data.get("suggested_percent", 0) if consensus_msg.data else 0
+            # 최종 투자 비율 결정
+            final_percent = consensus_msg.data.get("suggested_percent", 0) if consensus_msg.data else 0
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"최종 합의 도출 API 호출 실패 또는 타임아웃: {e}")
+            final_percent = (quant_percent + fundamental_percent) / 2
+            consensus_msg = CouncilMessage(
+                role=AnalystRole.FUNDAMENTAL,
+                speaker="시스템",
+                content="[시스템 경고] 의견 통합 과정 지연으로 양측 분석가 의견의 산술 평균을 최종 비율로 적용합니다.",
+                data={"suggested_percent": final_percent}
+            )
+            meeting.add_message(consensus_msg)
+
         if final_percent == 0:
             final_percent = (quant_percent + fundamental_percent) / 2
 
@@ -298,6 +376,18 @@ class CouncilOrchestrator:
             news_score=news_score,
         )
 
+        # SELL 시그널인 경우 보유 여부 확인 — 보유하지 않은 종목은 HOLD로 변경
+        if action == "SELL":
+            try:
+                holdings = await kiwoom_client.get_holdings()
+                held_symbols = [h.symbol for h in holdings]
+                if symbol not in held_symbols:
+                    logger.info(f"SELL → HOLD 변경: {symbol} 미보유 종목")
+                    action = "HOLD"
+            except Exception as e:
+                logger.warning(f"보유 확인 실패, SELL → HOLD: {symbol} - {e}")
+                action = "HOLD"
+
         signal = InvestmentSignal(
             symbol=symbol,
             company_name=company_name,
@@ -305,6 +395,8 @@ class CouncilOrchestrator:
             allocation_percent=abs(final_percent),
             suggested_amount=suggested_amount,
             suggested_quantity=suggested_quantity,
+            target_price=self._clamp_target_price(target_price, current_price),
+            stop_loss_price=self._clamp_stop_loss(stop_loss, current_price),
             quant_summary=quant_msg.content[:100] + "..." if len(quant_msg.content) > 100 else quant_msg.content,
             fundamental_summary=fundamental_msg.content[:100] + "..." if len(fundamental_msg.content) > 100 else fundamental_msg.content,
             consensus_reason=consensus_msg.content[:200] + "..." if len(consensus_msg.content) > 200 else consensus_msg.content,
@@ -318,12 +410,39 @@ class CouncilOrchestrator:
             can_trade, trade_reason = trading_hours.can_execute_order()
 
             if can_trade or not self.respect_trading_hours:
-                signal.status = SignalStatus.AUTO_EXECUTED
-                signal.executed_at = datetime.now()
-                logger.info(f"✅ 자동 체결: {symbol} {action}")
+                # 실제 키움 API 주문 실행
+                try:
+                    side = OrderSide.BUY if action == "BUY" else OrderSide.SELL
+                    order_result = await kiwoom_client.place_order(
+                        symbol=symbol,
+                        side=side,
+                        quantity=signal.suggested_quantity,
+                        price=0,  # 시장가 주문
+                        order_type=OrderType.MARKET,
+                    )
+
+                    if order_result.status == "submitted":
+                        signal.status = SignalStatus.AUTO_EXECUTED
+                        signal.executed_at = get_kst_now()
+                        logger.info(
+                            f"✅ 자동 체결 성공: {symbol} {action} "
+                            f"{signal.suggested_quantity}주 (주문번호: {order_result.order_no})"
+                        )
+                    else:
+                        # 주문 실패 시 대기 큐에 추가
+                        signal.status = SignalStatus.QUEUED
+                        self._queued_executions.append(signal)
+                        logger.warning(
+                            f"⚠️ 자동 체결 실패, 대기 큐 추가: {symbol} {action} - {order_result.message}"
+                        )
+                except Exception as e:
+                    # 예외 발생 시 대기 큐에 추가
+                    signal.status = SignalStatus.QUEUED
+                    self._queued_executions.append(signal)
+                    logger.error(f"❌ 자동 체결 오류, 대기 큐 추가: {symbol} {action} - {e}")
             else:
                 # 거래 시간이 아니면 대기 큐에 추가
-                signal.status = SignalStatus.PENDING
+                signal.status = SignalStatus.QUEUED
                 self._queued_executions.append(signal)
                 logger.info(f"⏳ 거래 시간 대기: {symbol} {action} - {trade_reason}")
         else:
@@ -359,7 +478,7 @@ class CouncilOrchestrator:
 펀더멘털 점수: {signal.fundamental_score}/10
 {price_info}
 
-상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 승인 대기 중"}
+상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 구매 대기 중 (장 개시 후 자동 체결)" if signal.status == SignalStatus.QUEUED else "⏳ 승인 대기 중"}
 
 📊 데이터 소스:
 {"• 📈 키움증권 실시간 차트 데이터" if technical_data else "• ⚠️ 차트 데이터 없음"}
@@ -376,6 +495,7 @@ class CouncilOrchestrator:
 
         # 콜백 알림
         await self._notify_signal(signal)
+        await self._persist_signal_to_db(signal, trigger_source=meeting.trigger_source)
 
         logger.info(f"AI 회의 완료: {company_name} - {signal.action} {signal.allocation_percent}%")
 
@@ -397,11 +517,46 @@ class CouncilOrchestrator:
         return self._meetings[-limit:]
 
     async def approve_signal(self, signal_id: str) -> Optional[InvestmentSignal]:
-        """시그널 승인"""
+        """시그널 승인 - BUY/SELL인 경우 자동으로 체결 시도 또는 대기열 추가"""
         for signal in self._pending_signals:
             if signal.id == signal_id and signal.status == SignalStatus.PENDING:
                 signal.status = SignalStatus.APPROVED
                 logger.info(f"시그널 승인됨: {signal.symbol} {signal.action}")
+                
+                # HOLD가 아닌 경우 (BUY/SELL) 체결 시도
+                if signal.action in ["BUY", "SELL"]:
+                    can_trade, reason = trading_hours.can_execute_order()
+                    
+                    if can_trade or not self.respect_trading_hours:
+                        # 거래 가능 시간 - 즉시 체결 시도
+                        try:
+                            side = OrderSide.BUY if signal.action == "BUY" else OrderSide.SELL
+                            order_result = await kiwoom_client.place_order(
+                                symbol=signal.symbol,
+                                side=side,
+                                quantity=signal.suggested_quantity,
+                                price=0,
+                                order_type=OrderType.MARKET,
+                            )
+                            
+                            if order_result.status == "submitted":
+                                signal.status = SignalStatus.EXECUTED
+                                signal.executed_at = get_kst_now()
+                                logger.info(
+                                    f"✅ 승인 후 즉시 체결: {signal.symbol} {signal.action} "
+                                    f"{signal.suggested_quantity}주 (주문번호: {order_result.order_no})"
+                                )
+                            else:
+                                logger.warning(f"주문 실패, 대기열에 추가: {signal.symbol} - {order_result.message}")
+                                self._queued_executions.append(signal)
+                        except Exception as e:
+                            logger.error(f"주문 오류, 대기열에 추가: {signal.symbol} - {e}")
+                            self._queued_executions.append(signal)
+                    else:
+                        # 거래 불가 시간 - 대기열에 추가
+                        logger.info(f"거래 시간 외, 대기열에 추가: {signal.symbol} {signal.action} - {reason}")
+                        self._queued_executions.append(signal)
+                
                 return signal
         return None
 
@@ -462,6 +617,33 @@ class CouncilOrchestrator:
         self.auto_execute = enabled
         logger.info(f"자동 체결 {'활성화' if enabled else '비활성화'}")
 
+    def _clamp_stop_loss(self, gpt_stop_loss: Optional[int], current_price: int) -> Optional[int]:
+        """GPT 손절가를 config 바운드 내로 제한"""
+        if not current_price:
+            return None
+
+        min_price = int(current_price * (1 - settings.max_stop_loss_percent / 100))
+        max_price = int(current_price * (1 - settings.min_stop_loss_percent / 100))
+
+        if gpt_stop_loss:
+            return max(min_price, min(max_price, gpt_stop_loss))
+
+        # GPT 값 없으면 기본 % 적용
+        return int(current_price * (1 - settings.stop_loss_percent / 100))
+
+    def _clamp_target_price(self, gpt_target: Optional[int], current_price: int) -> Optional[int]:
+        """GPT 목표가를 config 바운드 내로 제한"""
+        if not current_price:
+            return None
+
+        min_price = int(current_price * (1 + settings.min_take_profit_percent / 100))
+        max_price = int(current_price * (1 + settings.max_take_profit_percent / 100))
+
+        if gpt_target:
+            return max(min_price, min(max_price, gpt_target))
+
+        return int(current_price * (1 + settings.take_profit_percent / 100))
+
     def _determine_action(
         self,
         final_percent: float,
@@ -511,6 +693,120 @@ class CouncilOrchestrator:
         # HOLD
         logger.info(f"HOLD 결정: 조건 미충족 (비율: {final_percent}%, 평균: {avg_score:.1f})")
         return "HOLD"
+
+    async def _persist_signal_to_db(self, signal: InvestmentSignal, trigger_source: str = "news"):
+        """Council 시그널을 DB에 저장"""
+        try:
+            db_id = await trading_service.create_trading_signal(
+                symbol=signal.symbol,
+                signal_type=signal.action.lower(),
+                strength=signal.confidence * 100,
+                source_agent=trigger_source,
+                reason=signal.consensus_reason[:1000],
+                target_price=float(signal.target_price) if signal.target_price else None,
+                stop_loss=float(signal.stop_loss_price) if signal.stop_loss_price else None,
+                quantity=signal.suggested_quantity,
+                signal_status=signal.status.value,
+            )
+            signal._db_id = db_id  # DB ID 참조 저장
+            logger.info(f"Council signal → DB: {signal.symbol} {signal.action} (id={db_id})")
+        except Exception as e:
+            logger.error(f"Council signal DB 저장 실패: {signal.symbol} - {e}")
+
+    async def start_rebalance_review(
+        self,
+        symbol: str,
+        company_name: str,
+        current_holdings: int,
+        avg_buy_price: int,
+        current_price: int,
+        prev_target_price: Optional[int] = None,
+        prev_stop_loss: Optional[int] = None,
+    ) -> Optional[dict]:
+        """보유종목 일일 리밸런싱 재평가 (GPT LIGHT 단독)
+
+        장 마감 후 보유종목별로 최신 차트를 기반으로
+        target_price / stop_loss를 재산출하고 결과 dict를 반환.
+        GPT score ≤ 3이면 recommend_sell: True 포함.
+        """
+        try:
+            # 1. 최신 차트 데이터 조회
+            technical_data = await self._fetch_technical_data(symbol)
+            if not technical_data:
+                logger.warning(f"[리밸런싱] {symbol} 차트 데이터 없음 → 스킵")
+                return None
+
+            # 실시간 현재가 업데이트
+            if technical_data.current_price > 0:
+                current_price = technical_data.current_price
+
+            # 수익률 계산
+            profit_rate = (current_price - avg_buy_price) / avg_buy_price * 100 if avg_buy_price > 0 else 0
+
+            # 2. GPT 퀀트 분석 (보유 맥락 전달)
+            prev_target_str = f"{prev_target_price:,}원" if prev_target_price else "미설정"
+            prev_stop_str = f"{prev_stop_loss:,}원" if prev_stop_loss else "미설정"
+
+            request_prompt = (
+                f"보유종목 일일 재평가. "
+                f"보유수량 {current_holdings:,}주, 평균매입가 {avg_buy_price:,}원, "
+                f"현재가 {current_price:,}원, 수익률 {profit_rate:+.1f}%. "
+                f"이전 목표가 {prev_target_str}, 이전 손절가 {prev_stop_str}. "
+                f"최신 차트 기반으로 목표가와 손절가를 재설정해주세요."
+            )
+
+            quant_msg = await asyncio.wait_for(
+                quant_analyst.analyze(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=f"일일 리밸런싱 재평가 (수익률 {profit_rate:+.1f}%)",
+                    previous_messages=[],
+                    technical_data=technical_data,
+                    request=request_prompt,
+                ),
+                timeout=15.0,
+            )
+
+            # 3. 응답에서 target_price, stop_loss 추출 → clamp 적용
+            new_target = quant_msg.data.get("target_price") if quant_msg.data else None
+            new_stop = quant_msg.data.get("stop_loss") if quant_msg.data else None
+            score = quant_msg.data.get("score", 5) if quant_msg.data else 5
+
+            new_target = self._clamp_target_price(new_target, current_price)
+            new_stop = self._clamp_stop_loss(new_stop, current_price)
+
+            # 4. 비용 기록
+            cost_manager.record_analysis(symbol, AnalysisDepth.LIGHT)
+
+            # 5. 결과 반환
+            result = {
+                "symbol": symbol,
+                "company_name": company_name,
+                "current_price": current_price,
+                "profit_rate": profit_rate,
+                "new_target_price": new_target,
+                "new_stop_loss": new_stop,
+                "prev_target_price": prev_target_price,
+                "prev_stop_loss": prev_stop_loss,
+                "score": score,
+                "analysis": quant_msg.content[:500],
+                "recommend_sell": score <= 3,
+            }
+
+            logger.info(
+                f"[리밸런싱] {symbol} ({company_name}) "
+                f"score={score}, target={new_target}, stop={new_stop}, "
+                f"recommend_sell={result['recommend_sell']}"
+            )
+
+            return result
+
+        except asyncio.TimeoutError:
+            logger.error(f"[리밸런싱] {symbol} GPT 타임아웃")
+            return None
+        except Exception as e:
+            logger.error(f"[리밸런싱] {symbol} 오류: {e}")
+            return None
 
     async def start_sell_meeting(
         self,
@@ -563,25 +859,39 @@ class CouncilOrchestrator:
 
         # 2. GPT 퀀트 매도 분석
         meeting.current_round = 1
-        quant_msg = await quant_analyst.analyze(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=f"매도 검토: {sell_reason}",
-            previous_messages=meeting.messages,
-            technical_data=technical_data,
-            request=f"현재 보유 중인 종목의 매도 타이밍을 분석해주세요. 수익률 {profit_loss:+.1f}%, 사유: {sell_reason}",
-        )
-        meeting.add_message(quant_msg)
-        await self._notify_meeting_update(meeting)
+        try:
+            quant_msg = await asyncio.wait_for(
+                quant_analyst.analyze(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=f"매도 검토: {sell_reason}",
+                    previous_messages=meeting.messages,
+                    technical_data=technical_data,
+                    request=f"현재 보유 중인 종목의 매도 타이밍을 분석해주세요. 수익률 {profit_loss:+.1f}%, 사유: {sell_reason}",
+                ),
+                timeout=15.0  # 타임아웃 강제
+            )
+            meeting.add_message(quant_msg)
+            await self._notify_meeting_update(meeting)
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"매도 검토 중 퀀트 분석가 API 호출 실패 또는 타임아웃: {e}")
+            quant_msg = CouncilMessage(
+                role=AnalystRole.QUANT,
+                speaker="시스템",
+                content=f"[시스템 경고] 분석 지연 발생. 수익률 {profit_loss:+.1f}% 기반 기계적 매도를 우선 고려합니다.",
+                data={"suggested_percent": 30 if profit_loss >= 0 else 100, "score": 5}
+            )
+            meeting.add_message(quant_msg)
+            await self._notify_meeting_update(meeting)
 
         # 3. SELL 시그널 생성
         quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5
 
         # 매도 비율 결정 (손실 구간이면 전량, 수익 구간이면 일부)
-        if profit_loss < -5:  # 손절
+        if profit_loss < -settings.stop_loss_percent:  # 손절
             sell_percent = 100
             action = "SELL"
-        elif profit_loss > 20:  # 익절
+        elif profit_loss > settings.take_profit_percent:  # 익절
             sell_percent = 50  # 절반 익절
             action = "PARTIAL_SELL"
         else:
@@ -608,13 +918,39 @@ class CouncilOrchestrator:
 
         # 자동 체결 처리
         if self.auto_execute:
-            can_trade, _ = trading_hours.can_execute_order()
+            can_trade, trade_reason = trading_hours.can_execute_order()
             if can_trade or not self.respect_trading_hours:
-                signal.status = SignalStatus.AUTO_EXECUTED
-                signal.executed_at = datetime.now()
+                # 실제 키움 API 매도 주문 실행
+                try:
+                    order_result = await kiwoom_client.place_order(
+                        symbol=symbol,
+                        side=OrderSide.SELL,
+                        quantity=sell_quantity,
+                        price=0,  # 시장가 주문
+                        order_type=OrderType.MARKET,
+                    )
+
+                    if order_result.status == "submitted":
+                        signal.status = SignalStatus.AUTO_EXECUTED
+                        signal.executed_at = get_kst_now()
+                        logger.info(
+                            f"✅ 자동 매도 성공: {symbol} {sell_quantity}주 "
+                            f"(주문번호: {order_result.order_no})"
+                        )
+                    else:
+                        signal.status = SignalStatus.QUEUED
+                        self._queued_executions.append(signal)
+                        logger.warning(
+                            f"⚠️ 자동 매도 실패, 대기 큐 추가: {symbol} - {order_result.message}"
+                        )
+                except Exception as e:
+                    signal.status = SignalStatus.QUEUED
+                    self._queued_executions.append(signal)
+                    logger.error(f"❌ 자동 매도 오류, 대기 큐 추가: {symbol} - {e}")
             else:
-                signal.status = SignalStatus.PENDING
+                signal.status = SignalStatus.QUEUED
                 self._queued_executions.append(signal)
+                logger.info(f"⏳ 매도 거래 시간 대기: {symbol} - {trade_reason}")
         else:
             signal.status = SignalStatus.PENDING
 
@@ -633,7 +969,7 @@ class CouncilOrchestrator:
 📦 매도 수량: {sell_quantity:,}주
 💵 예상 금액: {sell_amount:,}원
 
-상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 승인 대기 중"}""",
+상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 구매 대기 중 (장 개시 후 자동 체결)" if signal.status == SignalStatus.QUEUED else "⏳ 승인 대기 중"}""",
             data=signal.to_dict(),
         )
         meeting.add_message(conclusion_msg)
@@ -645,6 +981,7 @@ class CouncilOrchestrator:
             self._pending_signals.append(signal)
 
         await self._notify_signal(signal)
+        await self._persist_signal_to_db(signal, trigger_source=meeting.trigger_source)
 
         cost_manager.record_analysis(symbol, AnalysisDepth.LIGHT)  # 매도는 가벼운 분석
 
@@ -662,7 +999,7 @@ class CouncilOrchestrator:
         remaining = []
 
         for signal in self._queued_executions:
-            if signal.status in (SignalStatus.PENDING, SignalStatus.APPROVED):
+            if signal.status in (SignalStatus.QUEUED, SignalStatus.PENDING, SignalStatus.APPROVED):
                 try:
                     # 실제 키움 API 호출
                     side = OrderSide.BUY if signal.action == "BUY" else OrderSide.SELL
@@ -683,6 +1020,7 @@ class CouncilOrchestrator:
                             f"{signal.suggested_quantity}주 (주문번호: {order_result.order_no})"
                         )
                         await self._notify_signal(signal)
+                        await self._update_signal_status_in_db(signal, executed=True)
                     else:
                         logger.error(f"❌ 대기 큐 주문 실패: {signal.symbol} - {order_result.message}")
                         remaining.append(signal)
@@ -718,6 +1056,96 @@ class CouncilOrchestrator:
     def get_cost_stats(self) -> dict:
         """비용 통계"""
         return cost_manager.get_stats()
+
+    async def restore_pending_signals(self):
+        """서버 재시작 시 DB에서 미체결 시그널 복원"""
+        try:
+            pending_db_signals = await trading_service.get_pending_signals(limit=50)
+
+            restored_queued = 0
+            restored_pending = 0
+
+            for s in pending_db_signals:
+                # 수량이 없으면 복원 불가
+                quantity = s.get("quantity")
+                if not quantity or quantity <= 0:
+                    logger.debug(f"수량 없는 시그널 스킵: {s['symbol']} (id={s['id']})")
+                    continue
+
+                action = s["signal_type"].upper()
+                # HOLD 시그널은 체결 대상이 아님
+                if action == "HOLD":
+                    continue
+
+                confidence = s["strength"] / 100.0
+
+                signal = InvestmentSignal(
+                    id=f"r{s['id']}",  # 복원된 시그널 구분용 prefix
+                    symbol=s["symbol"],
+                    company_name="",
+                    action=action,
+                    suggested_quantity=quantity,
+                    suggested_amount=0,
+                    target_price=int(s["target_price"]) if s.get("target_price") else None,
+                    stop_loss_price=int(s["stop_loss"]) if s.get("stop_loss") else None,
+                    consensus_reason=s.get("reason", ""),
+                    confidence=confidence,
+                )
+                signal._db_id = s["id"]
+
+                # 원래 상태에 따라 복원
+                original_status = s.get("signal_status", "")
+                if original_status == "queued":
+                    signal.status = SignalStatus.QUEUED
+                    self._queued_executions.append(signal)
+                    restored_queued += 1
+                elif original_status == "pending":
+                    signal.status = SignalStatus.PENDING
+                    self._pending_signals.append(signal)
+                    restored_pending += 1
+                else:
+                    # 상태 불분명한 경우 auto_execute 기준으로 결정
+                    if self.auto_execute and confidence >= self.min_confidence:
+                        signal.status = SignalStatus.QUEUED
+                        self._queued_executions.append(signal)
+                        restored_queued += 1
+                    else:
+                        signal.status = SignalStatus.PENDING
+                        self._pending_signals.append(signal)
+                        restored_pending += 1
+
+            if restored_queued or restored_pending:
+                logger.info(
+                    f"✅ 미체결 시그널 복원 완료: "
+                    f"대기큐 {restored_queued}건, 승인대기 {restored_pending}건"
+                )
+            else:
+                logger.info("미체결 시그널 없음 (복원 대상 0건)")
+
+        except Exception as e:
+            logger.error(f"미체결 시그널 복원 실패: {e}")
+
+    async def _update_signal_status_in_db(self, signal: InvestmentSignal, executed: bool = False):
+        """DB 시그널 상태 업데이트"""
+        db_id = getattr(signal, "_db_id", None)
+        if not db_id:
+            return
+        try:
+            from app.core.database import async_session_maker
+            from app.models import TradingSignal as TradingSignalModel
+            from sqlalchemy import select
+
+            async with async_session_maker() as session:
+                result = await session.execute(
+                    select(TradingSignalModel).where(TradingSignalModel.id == db_id)
+                )
+                db_signal = result.scalar_one_or_none()
+                if db_signal:
+                    db_signal.is_executed = executed
+                    db_signal.signal_status = signal.status.value
+                    await session.commit()
+        except Exception as e:
+            logger.error(f"DB 시그널 상태 업데이트 실패 (id={db_id}): {e}")
 
 
 # 싱글톤 인스턴스
