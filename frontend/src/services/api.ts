@@ -2,6 +2,7 @@ import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const WS_BASE_URL = import.meta.env.VITE_WS_URL || API_BASE_URL.replace(/^http/, 'ws');
 
 export const api = axios.create({
   baseURL: `${API_BASE_URL}/api/v1`,
@@ -248,8 +249,7 @@ export const analysisApi = {
 
 // WebSocket connection helper
 export const createWebSocket = (endpoint: string): WebSocket => {
-  const wsUrl = API_BASE_URL.replace('http', 'ws');
-  return new WebSocket(`${wsUrl}/ws/${endpoint}`);
+  return new WebSocket(`${WS_BASE_URL}/ws/${endpoint}`);
 };
 
 // Market WebSocket
@@ -636,8 +636,7 @@ export const councilApi = {
 // Council WebSocket (uses different path than other websockets)
 export const councilWebSocket = {
   connect: () => {
-    const wsUrl = API_BASE_URL.replace('http', 'ws');
-    return new WebSocket(`${wsUrl}/api/v1/council/ws`);
+    return new WebSocket(`${WS_BASE_URL}/api/v1/council/ws`);
   },
   ping: (ws: WebSocket) => {
     ws.send(JSON.stringify({ type: 'ping' }));
@@ -700,8 +699,7 @@ export const quantSignalsApi = {
 // Quant Signals WebSocket
 export const signalsWebSocket = {
   connect: () => {
-    const wsUrl = API_BASE_URL.replace('http', 'ws');
-    return new WebSocket(`${wsUrl}/api/v1/signals/ws`);
+    return new WebSocket(`${WS_BASE_URL}/api/v1/signals/ws`);
   },
   ping: (ws: WebSocket) => {
     ws.send(JSON.stringify({ type: 'ping' }));
@@ -711,8 +709,7 @@ export const signalsWebSocket = {
 // News Monitor WebSocket
 export const newsMonitorWebSocket = {
   connect: () => {
-    const wsUrl = API_BASE_URL.replace('http', 'ws');
-    return new WebSocket(`${wsUrl}/api/v1/news-monitor/ws`);
+    return new WebSocket(`${WS_BASE_URL}/api/v1/news-monitor/ws`);
   },
   ping: (ws: WebSocket) => {
     ws.send(JSON.stringify({ type: 'ping' }));

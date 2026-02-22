@@ -294,6 +294,10 @@ export default function TradingSignals() {
       } else if (data.type === 'signal_executed') {
         queryClient.invalidateQueries({ queryKey: ['signals'] });
         queryClient.invalidateQueries({ queryKey: ['account'] });
+      } else if (data.type === 'trading') {
+        queryClient.invalidateQueries({ queryKey: ['signals'] });
+        queryClient.invalidateQueries({ queryKey: ['account'] });
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
       }
     };
 

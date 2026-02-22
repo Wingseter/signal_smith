@@ -1,34 +1,32 @@
 """
 Performance Analytics API Endpoints
-신호별 수익률, Sharpe Ratio, MDD 추적
+신호 성과, 리스크 지표, 월간 수익률 집계
 """
 
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import func, and_, case
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
 from app.api.routes.auth import get_current_user
-from app.models.user import User
-from app.models.transaction import Transaction as Order, TradingSignal
+from app.core.database import get_sync_db_dep
 from app.models.stock import StockPrice
+from app.models.transaction import TradingSignal, Transaction as Order
+from app.models.user import User
 
-import numpy as np
-import pandas as pd
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-# Response Models
 class SignalPerformance(BaseModel):
     """Individual signal performance."""
+
     signal_id: int
     symbol: str
     signal_type: str
@@ -43,6 +41,7 @@ class SignalPerformance(BaseModel):
 
 class PerformanceSummary(BaseModel):
     """Overall performance summary."""
+
     total_signals: int
     executed_signals: int
     buy_signals: int
@@ -56,6 +55,7 @@ class PerformanceSummary(BaseModel):
 
 class RiskMetrics(BaseModel):
     """Risk-related metrics."""
+
     sharpe_ratio: float
     sortino_ratio: float
     max_drawdown: float
@@ -67,12 +67,14 @@ class RiskMetrics(BaseModel):
 
 class TimeSeriesPoint(BaseModel):
     """Time series data point."""
+
     date: str
     value: float
 
 
 class PerformanceDashboard(BaseModel):
     """Complete performance dashboard data."""
+
     summary: PerformanceSummary
     risk_metrics: RiskMetrics
     equity_curve: List[TimeSeriesPoint]
@@ -84,88 +86,87 @@ class PerformanceDashboard(BaseModel):
     monthly_returns: List[Dict[str, Any]]
 
 
-@router.get("/dashboard", response_model=PerformanceDashboard)
-async def get_performance_dashboard(
-    period: str = Query("3m", description="Period: 1m, 3m, 6m, 1y, all"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-) -> PerformanceDashboard:
-    """
-    Get comprehensive performance dashboard with all metrics.
-    """
-    # Calculate date range
+def _period_start(period: str) -> datetime:
     end_date = datetime.now()
-    if period == "1m":
-        start_date = end_date - timedelta(days=30)
-    elif period == "3m":
-        start_date = end_date - timedelta(days=90)
-    elif period == "6m":
-        start_date = end_date - timedelta(days=180)
-    elif period == "1y":
-        start_date = end_date - timedelta(days=365)
-    else:
-        start_date = datetime(2020, 1, 1)
+    period_days = {"1m": 30, "3m": 90, "6m": 180, "1y": 365, "all": 3650}
+    return end_date - timedelta(days=period_days.get(period, 90))
 
-    # Fetch signals
-    signals = (
-        db.query(TradingSignal)
-        .filter(
-            TradingSignal.user_id == current_user.id,
-            TradingSignal.created_at >= start_date,
-        )
-        .order_by(TradingSignal.created_at.desc())
-        .all()
-    )
 
-    # Fetch executed orders
-    orders = (
+def _normalize_strength(raw_strength: Optional[float]) -> float:
+    if raw_strength is None:
+        return 0.0
+    strength = float(raw_strength)
+    # 과거 코드가 0~1 스케일을 저장한 케이스를 보정
+    return round(strength * 100, 2) if 0 <= strength <= 1 else round(strength, 2)
+
+
+def _load_user_orders(db: Session, user_id: int, start_date: datetime, end_date: Optional[datetime] = None) -> List[Order]:
+    query = (
         db.query(Order)
         .filter(
-            Order.user_id == current_user.id,
+            Order.user_id == user_id,
             Order.created_at >= start_date,
             Order.status == "filled",
         )
         .order_by(Order.created_at)
-        .all()
     )
+    if end_date:
+        query = query.filter(Order.created_at <= end_date)
+    return query.all()
 
-    # Calculate signal performance
-    signal_performance = await _calculate_signal_performance(signals, db)
 
-    # Calculate summary
+def _load_relevant_signals(
+    db: Session,
+    symbols: List[str],
+    start_date: Optional[datetime] = None,
+    limit: Optional[int] = None,
+    signal_type: Optional[str] = None,
+    executed_only: bool = False,
+) -> List[TradingSignal]:
+    if not symbols:
+        return []
+
+    query = db.query(TradingSignal).filter(TradingSignal.symbol.in_(symbols))
+    if start_date:
+        query = query.filter(TradingSignal.created_at >= start_date)
+    if signal_type:
+        query = query.filter(TradingSignal.signal_type == signal_type)
+    if executed_only:
+        query = query.filter(TradingSignal.is_executed == True)
+    query = query.order_by(TradingSignal.created_at.desc())
+    if limit:
+        query = query.limit(limit)
+    return query.all()
+
+
+@router.get("/dashboard", response_model=PerformanceDashboard)
+async def get_performance_dashboard(
+    period: str = Query("3m", description="Period: 1m, 3m, 6m, 1y, all"),
+    db: Session = Depends(get_sync_db_dep),
+    current_user: User = Depends(get_current_user),
+) -> PerformanceDashboard:
+    start_date = _period_start(period)
+    orders = _load_user_orders(db, current_user.id, start_date)
+
+    user_symbols = sorted({o.symbol for o in orders})
+    signals = _load_relevant_signals(db, user_symbols, start_date=start_date)
+
+    signal_performance = _calculate_signal_performance(signals, db)
     summary = _calculate_summary(signals, signal_performance)
-
-    # Calculate equity curve and returns from orders
     equity_data = _calculate_equity_curve(orders, start_date)
-
-    # Calculate risk metrics
     risk_metrics = _calculate_risk_metrics(equity_data["returns"])
-
-    # Calculate drawdown series
     drawdown_series = _calculate_drawdown_series(equity_data["equity"])
-
-    # Performance by symbol
     perf_by_symbol = _calculate_performance_by_symbol(signal_performance)
-
-    # Performance by signal type
     perf_by_type = _calculate_performance_by_type(signal_performance)
-
-    # Monthly returns
     monthly_returns = _calculate_monthly_returns(equity_data["equity"])
 
     return PerformanceDashboard(
         summary=summary,
         risk_metrics=risk_metrics,
-        equity_curve=[
-            TimeSeriesPoint(date=d.isoformat(), value=v)
-            for d, v in equity_data["equity"]
-        ],
-        daily_returns=[
-            TimeSeriesPoint(date=d.isoformat(), value=v)
-            for d, v in equity_data["returns"]
-        ],
+        equity_curve=[TimeSeriesPoint(date=d.isoformat(), value=v) for d, v in equity_data["equity"]],
+        daily_returns=[TimeSeriesPoint(date=d.isoformat(), value=v) for d, v in equity_data["returns"]],
         drawdown_series=drawdown_series,
-        signal_performance=signal_performance[:50],  # Latest 50
+        signal_performance=signal_performance[:50],
         performance_by_symbol=perf_by_symbol,
         performance_by_type=perf_by_type,
         monthly_returns=monthly_returns,
@@ -178,50 +179,41 @@ async def get_signal_performance(
     signal_type: Optional[str] = None,
     executed_only: bool = False,
     limit: int = Query(50, le=200),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> List[SignalPerformance]:
-    """
-    Get performance of individual signals with filters.
-    """
-    query = db.query(TradingSignal).filter(TradingSignal.user_id == current_user.id)
+    # 사용자 주문 이력이 있는 종목으로 범위를 제한
+    all_orders = (
+        db.query(Order)
+        .filter(Order.user_id == current_user.id)
+        .order_by(Order.created_at.desc())
+        .all()
+    )
+    user_symbols = sorted({o.symbol for o in all_orders})
 
     if symbol:
-        query = query.filter(TradingSignal.symbol == symbol)
-    if signal_type:
-        query = query.filter(TradingSignal.signal_type == signal_type)
-    if executed_only:
-        query = query.filter(TradingSignal.executed == True)
+        symbols = [symbol]
+    else:
+        symbols = user_symbols
 
-    signals = query.order_by(TradingSignal.created_at.desc()).limit(limit).all()
-
-    return await _calculate_signal_performance(signals, db)
+    signals = _load_relevant_signals(
+        db,
+        symbols=symbols,
+        signal_type=signal_type,
+        executed_only=executed_only,
+        limit=limit,
+    )
+    return _calculate_signal_performance(signals, db)
 
 
 @router.get("/risk-metrics")
 async def get_risk_metrics(
     period: str = Query("3m", description="Period: 1m, 3m, 6m, 1y, all"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> RiskMetrics:
-    """
-    Get risk metrics for the portfolio.
-    """
-    end_date = datetime.now()
-    period_map = {"1m": 30, "3m": 90, "6m": 180, "1y": 365, "all": 3650}
-    start_date = end_date - timedelta(days=period_map.get(period, 90))
-
-    orders = (
-        db.query(Order)
-        .filter(
-            Order.user_id == current_user.id,
-            Order.created_at >= start_date,
-            Order.status == "filled",
-        )
-        .order_by(Order.created_at)
-        .all()
-    )
-
+    start_date = _period_start(period)
+    orders = _load_user_orders(db, current_user.id, start_date)
     equity_data = _calculate_equity_curve(orders, start_date)
     return _calculate_risk_metrics(equity_data["returns"])
 
@@ -229,63 +221,29 @@ async def get_risk_metrics(
 @router.get("/by-symbol")
 async def get_performance_by_symbol(
     period: str = Query("3m"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Dict[str, float]]:
-    """
-    Get performance breakdown by symbol.
-    """
-    end_date = datetime.now()
-    period_map = {"1m": 30, "3m": 90, "6m": 180, "1y": 365, "all": 3650}
-    start_date = end_date - timedelta(days=period_map.get(period, 90))
-
-    signals = (
-        db.query(TradingSignal)
-        .filter(
-            TradingSignal.user_id == current_user.id,
-            TradingSignal.created_at >= start_date,
-        )
-        .all()
-    )
-
-    signal_performance = await _calculate_signal_performance(signals, db)
+    start_date = _period_start(period)
+    orders = _load_user_orders(db, current_user.id, start_date)
+    symbols = sorted({o.symbol for o in orders})
+    signals = _load_relevant_signals(db, symbols=symbols, start_date=start_date)
+    signal_performance = _calculate_signal_performance(signals, db)
     return _calculate_performance_by_symbol(signal_performance)
 
 
 @router.get("/drawdown")
 async def get_drawdown_analysis(
     period: str = Query("3m"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """
-    Get detailed drawdown analysis.
-    """
-    end_date = datetime.now()
-    period_map = {"1m": 30, "3m": 90, "6m": 180, "1y": 365, "all": 3650}
-    start_date = end_date - timedelta(days=period_map.get(period, 90))
-
-    orders = (
-        db.query(Order)
-        .filter(
-            Order.user_id == current_user.id,
-            Order.created_at >= start_date,
-            Order.status == "filled",
-        )
-        .order_by(Order.created_at)
-        .all()
-    )
-
+    start_date = _period_start(period)
+    orders = _load_user_orders(db, current_user.id, start_date)
     equity_data = _calculate_equity_curve(orders, start_date)
     drawdown_series = _calculate_drawdown_series(equity_data["equity"])
 
-    # Find worst drawdowns
-    if drawdown_series:
-        sorted_dd = sorted(drawdown_series, key=lambda x: x.value)
-        worst_drawdowns = sorted_dd[:5]
-    else:
-        worst_drawdowns = []
-
+    worst_drawdowns = sorted(drawdown_series, key=lambda p: p.value)[:5] if drawdown_series else []
     return {
         "current_drawdown": drawdown_series[-1].value if drawdown_series else 0,
         "max_drawdown": min(d.value for d in drawdown_series) if drawdown_series else 0,
@@ -297,58 +255,51 @@ async def get_drawdown_analysis(
 @router.get("/monthly-returns")
 async def get_monthly_returns(
     year: Optional[int] = None,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> List[Dict[str, Any]]:
-    """
-    Get monthly returns breakdown.
-    """
     current_year = year or datetime.now().year
     start_date = datetime(current_year, 1, 1)
     end_date = datetime(current_year, 12, 31)
-
-    orders = (
-        db.query(Order)
-        .filter(
-            Order.user_id == current_user.id,
-            Order.created_at >= start_date,
-            Order.created_at <= end_date,
-            Order.status == "filled",
-        )
-        .order_by(Order.created_at)
-        .all()
-    )
-
+    orders = _load_user_orders(db, current_user.id, start_date, end_date=end_date)
     equity_data = _calculate_equity_curve(orders, start_date)
     return _calculate_monthly_returns(equity_data["equity"])
 
 
-# Helper Functions
-async def _calculate_signal_performance(
-    signals: List[TradingSignal], db: Session
-) -> List[SignalPerformance]:
+def _calculate_signal_performance(signals: List[TradingSignal], db: Session) -> List[SignalPerformance]:
     """Calculate performance for each signal."""
-    results = []
-
+    results: List[SignalPerformance] = []
     for signal in signals:
-        # Get current price
         current_price_record = (
             db.query(StockPrice)
             .filter(StockPrice.symbol == signal.symbol)
             .order_by(StockPrice.date.desc())
             .first()
         )
+        current_price = float(current_price_record.close) if current_price_record else 0.0
 
-        current_price = float(current_price_record.close) if current_price_record else signal.price
-        signal_price = float(signal.price)
+        reference_record = (
+            db.query(StockPrice)
+            .filter(
+                StockPrice.symbol == signal.symbol,
+                StockPrice.date <= signal.created_at,
+            )
+            .order_by(StockPrice.date.desc())
+            .first()
+        )
+        if reference_record:
+            signal_price = float(reference_record.close)
+        elif signal.target_price is not None:
+            signal_price = float(signal.target_price)
+        else:
+            signal_price = current_price
 
-        # Calculate P&L based on signal type
         if signal.signal_type == "buy":
             pnl = current_price - signal_price
-            pnl_pct = ((current_price - signal_price) / signal_price) * 100
-        else:  # sell
+            pnl_pct = ((current_price - signal_price) / signal_price) * 100 if signal_price > 0 else 0.0
+        else:
             pnl = signal_price - current_price
-            pnl_pct = ((signal_price - current_price) / signal_price) * 100
+            pnl_pct = ((signal_price - current_price) / signal_price) * 100 if signal_price > 0 else 0.0
 
         results.append(
             SignalPerformance(
@@ -356,22 +307,18 @@ async def _calculate_signal_performance(
                 symbol=signal.symbol,
                 signal_type=signal.signal_type,
                 signal_date=signal.created_at.isoformat(),
-                signal_price=signal_price,
-                current_price=current_price,
-                pnl=pnl,
-                pnl_pct=pnl_pct,
-                executed=signal.executed,
-                strength=float(signal.strength) if signal.strength else 0.0,
+                signal_price=round(signal_price, 2),
+                current_price=round(current_price, 2),
+                pnl=round(pnl, 2),
+                pnl_pct=round(pnl_pct, 2),
+                executed=bool(signal.is_executed),
+                strength=_normalize_strength(float(signal.strength) if signal.strength is not None else None),
             )
         )
-
     return results
 
 
-def _calculate_summary(
-    signals: List[TradingSignal], performance: List[SignalPerformance]
-) -> PerformanceSummary:
-    """Calculate performance summary."""
+def _calculate_summary(signals: List[TradingSignal], performance: List[SignalPerformance]) -> PerformanceSummary:
     if not signals:
         return PerformanceSummary(
             total_signals=0,
@@ -386,14 +333,13 @@ def _calculate_summary(
         )
 
     total = len(signals)
-    executed = sum(1 for s in signals if s.executed)
+    executed = sum(1 for s in signals if s.is_executed)
     buy_count = sum(1 for s in signals if s.signal_type == "buy")
     sell_count = sum(1 for s in signals if s.signal_type == "sell")
 
     wins = sum(1 for p in performance if p.pnl > 0)
     win_rate = (wins / len(performance)) * 100 if performance else 0
-
-    avg_return = np.mean([p.pnl_pct for p in performance]) if performance else 0
+    avg_return = float(np.mean([p.pnl_pct for p in performance])) if performance else 0
     total_pnl = sum(p.pnl for p in performance)
 
     best = max(performance, key=lambda x: x.pnl_pct) if performance else None
@@ -404,35 +350,34 @@ def _calculate_summary(
         executed_signals=executed,
         buy_signals=buy_count,
         sell_signals=sell_count,
-        win_rate=win_rate,
-        avg_return=avg_return,
-        total_pnl=total_pnl,
-        best_signal=best.dict() if best else None,
-        worst_signal=worst.dict() if worst else None,
+        win_rate=round(win_rate, 2),
+        avg_return=round(avg_return, 2),
+        total_pnl=round(total_pnl, 2),
+        best_signal=best.model_dump() if best else None,
+        worst_signal=worst.model_dump() if worst else None,
     )
 
 
-def _calculate_equity_curve(
-    orders: List[Order], start_date: datetime
-) -> Dict[str, List]:
-    """Calculate equity curve from orders."""
+def _calculate_equity_curve(orders: List[Order], start_date: datetime) -> Dict[str, List]:
     if not orders:
         return {"equity": [], "returns": []}
 
-    # Build daily equity from orders
-    initial_capital = 10_000_000  # Default
-    equity = initial_capital
-    equity_points = [(start_date, equity)]
-    returns_points = []
-
-    positions = {}  # symbol -> (quantity, avg_price)
+    initial_capital = 10_000_000
+    cash = float(initial_capital)
+    equity_points: List[tuple] = [(start_date, float(initial_capital))]
+    returns_points: List[tuple] = []
+    positions: Dict[str, tuple] = {}  # symbol -> (quantity, avg_price)
 
     for order in orders:
         symbol = order.symbol
-        quantity = order.quantity
-        price = float(order.price)
+        quantity = int(order.filled_quantity or order.quantity or 0)
+        price = float(order.filled_price or order.price or 0)
+        side = order.transaction_type
 
-        if order.side == "buy":
+        if quantity <= 0:
+            continue
+
+        if side == "buy":
             if symbol in positions:
                 old_qty, old_price = positions[symbol]
                 new_qty = old_qty + quantity
@@ -440,38 +385,30 @@ def _calculate_equity_curve(
                 positions[symbol] = (new_qty, avg_price)
             else:
                 positions[symbol] = (quantity, price)
-            equity -= quantity * price
-        else:  # sell
+            cash -= quantity * price
+        else:
             if symbol in positions:
                 old_qty, avg_price = positions[symbol]
                 sell_qty = min(quantity, old_qty)
-                pnl = (price - avg_price) * sell_qty
-                equity += sell_qty * price
-
-                if old_qty - sell_qty > 0:
-                    positions[symbol] = (old_qty - sell_qty, avg_price)
+                cash += sell_qty * price
+                remain_qty = old_qty - sell_qty
+                if remain_qty > 0:
+                    positions[symbol] = (remain_qty, avg_price)
                 else:
                     del positions[symbol]
 
-        # Calculate total portfolio value
-        portfolio_value = equity
-        for sym, (qty, avg_p) in positions.items():
-            portfolio_value += qty * avg_p  # Simplified: use avg price
-
+        portfolio_value = cash + sum(qty * avg_price for qty, avg_price in positions.values())
         equity_points.append((order.created_at, portfolio_value))
 
-        # Calculate daily return
         if len(equity_points) > 1:
             prev_value = equity_points[-2][1]
-            if prev_value > 0:
-                daily_return = ((portfolio_value - prev_value) / prev_value) * 100
-                returns_points.append((order.created_at, daily_return))
+            daily_return = ((portfolio_value - prev_value) / prev_value) * 100 if prev_value > 0 else 0
+            returns_points.append((order.created_at, daily_return))
 
     return {"equity": equity_points, "returns": returns_points}
 
 
 def _calculate_risk_metrics(returns: List[tuple]) -> RiskMetrics:
-    """Calculate risk metrics from returns."""
     if not returns or len(returns) < 2:
         return RiskMetrics(
             sharpe_ratio=0,
@@ -483,42 +420,31 @@ def _calculate_risk_metrics(returns: List[tuple]) -> RiskMetrics:
             calmar_ratio=0,
         )
 
-    returns_values = [r[1] for r in returns]
-    returns_array = np.array(returns_values)
+    returns_array = np.array([r[1] for r in returns], dtype=float)
+    volatility = float(np.std(returns_array) * np.sqrt(252))
+    risk_free = 3.5 / 252
+    excess = returns_array - risk_free
 
-    # Volatility (annualized)
-    volatility = np.std(returns_array) * np.sqrt(252)
+    std = float(np.std(returns_array))
+    sharpe = (float(np.mean(excess)) / std) * np.sqrt(252) if std > 0 else 0
 
-    # Risk-free rate (annualized, in %)
-    risk_free = 3.5 / 252  # Daily risk-free rate
+    downside = returns_array[returns_array < 0]
+    downside_std = float(np.std(downside)) if len(downside) else 0
+    sortino = (float(np.mean(excess)) / downside_std) * np.sqrt(252) if downside_std > 0 else 0
 
-    # Sharpe Ratio
-    excess_returns = returns_array - risk_free
-    sharpe = (np.mean(excess_returns) / np.std(returns_array)) * np.sqrt(252) if np.std(returns_array) > 0 else 0
-
-    # Sortino Ratio
-    negative_returns = returns_array[returns_array < 0]
-    downside_std = np.std(negative_returns) if len(negative_returns) > 0 else 0
-    sortino = (np.mean(excess_returns) / downside_std) * np.sqrt(252) if downside_std > 0 else 0
-
-    # VaR 95%
-    var_95 = np.percentile(returns_array, 5)
-
-    # Max Drawdown (simplified)
+    var_95 = float(np.percentile(returns_array, 5))
     cumulative = np.cumprod(1 + returns_array / 100)
     running_max = np.maximum.accumulate(cumulative)
     drawdowns = (cumulative - running_max) / running_max * 100
-    max_dd = np.min(drawdowns) if len(drawdowns) > 0 else 0
-
-    # Calmar Ratio
-    annualized_return = np.mean(returns_array) * 252
+    max_dd = float(np.min(drawdowns)) if len(drawdowns) else 0
+    annualized_return = float(np.mean(returns_array) * 252)
     calmar = annualized_return / abs(max_dd) if max_dd != 0 else 0
 
     return RiskMetrics(
         sharpe_ratio=round(sharpe, 4),
         sortino_ratio=round(sortino, 4),
         max_drawdown=round(max_dd, 2),
-        max_drawdown_duration=0,  # Would need more complex calculation
+        max_drawdown_duration=0,
         volatility=round(volatility, 2),
         var_95=round(var_95, 2),
         calmar_ratio=round(calmar, 4),
@@ -526,102 +452,90 @@ def _calculate_risk_metrics(returns: List[tuple]) -> RiskMetrics:
 
 
 def _calculate_drawdown_series(equity: List[tuple]) -> List[TimeSeriesPoint]:
-    """Calculate drawdown time series."""
     if not equity:
         return []
 
-    series = []
+    series: List[TimeSeriesPoint] = []
     peak = equity[0][1]
-
     for date, value in equity:
         if value > peak:
             peak = value
         dd = ((value - peak) / peak) * 100 if peak > 0 else 0
         series.append(TimeSeriesPoint(date=date.isoformat(), value=round(dd, 2)))
-
     return series
 
 
-def _calculate_performance_by_symbol(
-    performance: List[SignalPerformance],
-) -> Dict[str, Dict[str, float]]:
-    """Calculate performance grouped by symbol."""
-    by_symbol = {}
-
+def _calculate_performance_by_symbol(performance: List[SignalPerformance]) -> Dict[str, Dict[str, float]]:
+    by_symbol: Dict[str, Dict[str, Any]] = {}
     for p in performance:
         if p.symbol not in by_symbol:
-            by_symbol[p.symbol] = {"signals": 0, "wins": 0, "total_pnl": 0, "avg_return": []}
-
+            by_symbol[p.symbol] = {"signals": 0, "wins": 0, "total_pnl": 0.0, "returns": []}
         by_symbol[p.symbol]["signals"] += 1
         if p.pnl > 0:
             by_symbol[p.symbol]["wins"] += 1
         by_symbol[p.symbol]["total_pnl"] += p.pnl
-        by_symbol[p.symbol]["avg_return"].append(p.pnl_pct)
+        by_symbol[p.symbol]["returns"].append(p.pnl_pct)
 
-    result = {}
+    result: Dict[str, Dict[str, float]] = {}
     for symbol, data in by_symbol.items():
+        signals = int(data["signals"])
+        win_rate = (data["wins"] / signals) * 100 if signals else 0
+        avg_return = float(np.mean(data["returns"])) if data["returns"] else 0
         result[symbol] = {
-            "signals": data["signals"],
-            "win_rate": (data["wins"] / data["signals"]) * 100 if data["signals"] > 0 else 0,
-            "total_pnl": round(data["total_pnl"], 0),
-            "avg_return": round(np.mean(data["avg_return"]), 2) if data["avg_return"] else 0,
+            "signals": float(signals),
+            "win_rate": round(win_rate, 2),
+            "total_pnl": round(float(data["total_pnl"]), 2),
+            "avg_return": round(avg_return, 2),
         }
-
     return result
 
 
-def _calculate_performance_by_type(
-    performance: List[SignalPerformance],
-) -> Dict[str, Dict[str, float]]:
-    """Calculate performance grouped by signal type."""
-    by_type = {"buy": [], "sell": []}
-
+def _calculate_performance_by_type(performance: List[SignalPerformance]) -> Dict[str, Dict[str, float]]:
+    grouped: Dict[str, List[SignalPerformance]] = {"buy": [], "sell": []}
     for p in performance:
-        if p.signal_type in by_type:
-            by_type[p.signal_type].append(p)
+        if p.signal_type in grouped:
+            grouped[p.signal_type].append(p)
 
-    result = {}
-    for signal_type, signals in by_type.items():
-        if signals:
-            wins = sum(1 for s in signals if s.pnl > 0)
-            result[signal_type] = {
-                "count": len(signals),
-                "win_rate": (wins / len(signals)) * 100,
-                "avg_return": round(np.mean([s.pnl_pct for s in signals]), 2),
-                "total_pnl": round(sum(s.pnl for s in signals), 0),
-            }
-        else:
-            result[signal_type] = {
-                "count": 0,
-                "win_rate": 0,
-                "avg_return": 0,
-                "total_pnl": 0,
-            }
+    result: Dict[str, Dict[str, float]] = {}
+    for signal_type, signals in grouped.items():
+        if not signals:
+            result[signal_type] = {"count": 0, "win_rate": 0, "avg_return": 0, "total_pnl": 0}
+            continue
 
+        wins = sum(1 for s in signals if s.pnl > 0)
+        avg_return = float(np.mean([s.pnl_pct for s in signals]))
+        total_pnl = sum(s.pnl for s in signals)
+        result[signal_type] = {
+            "count": float(len(signals)),
+            "win_rate": round((wins / len(signals)) * 100, 2),
+            "avg_return": round(avg_return, 2),
+            "total_pnl": round(total_pnl, 2),
+        }
     return result
 
 
 def _calculate_monthly_returns(equity: List[tuple]) -> List[Dict[str, Any]]:
-    """Calculate monthly returns."""
     if not equity:
         return []
 
-    # Group by month
-    monthly = {}
+    monthly: Dict[str, Dict[str, float]] = {}
     for date, value in equity:
         key = f"{date.year}-{date.month:02d}"
         if key not in monthly:
-            monthly[key] = {"start": value, "end": value}
-        monthly[key]["end"] = value
+            monthly[key] = {"start": float(value), "end": float(value)}
+        monthly[key]["end"] = float(value)
 
-    results = []
+    results: List[Dict[str, Any]] = []
     for month, data in sorted(monthly.items()):
-        ret = ((data["end"] - data["start"]) / data["start"]) * 100 if data["start"] > 0 else 0
-        results.append({
-            "month": month,
-            "return": round(ret, 2),
-            "start_value": round(data["start"], 0),
-            "end_value": round(data["end"], 0),
-        })
-
+        start_value = data["start"]
+        end_value = data["end"]
+        ret = ((end_value - start_value) / start_value) * 100 if start_value > 0 else 0
+        results.append(
+            {
+                "month": month,
+                "return": round(ret, 2),
+                "start_value": round(start_value, 2),
+                "end_value": round(end_value, 2),
+            }
+        )
     return results

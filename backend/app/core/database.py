@@ -79,3 +79,20 @@ def get_sync_db() -> Generator[Session, None, None]:
         raise
     finally:
         session.close()
+
+
+def get_sync_db_dep() -> Generator[Session, None, None]:
+    """FastAPI dependency for sync DB session.
+
+    Some route modules still use sync SQLAlchemy ORM patterns (`db.query(...)`).
+    This dependency keeps them functional while the async migration is phased in.
+    """
+    session = sync_session_maker()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

@@ -81,12 +81,13 @@ def decode_token(token: str) -> Optional[TokenData]:
             settings.secret_key,
             algorithms=[settings.algorithm],
         )
-        user_id: int = payload.get("sub")
+        user_id_raw = payload.get("sub")
+        user_id = int(user_id_raw) if user_id_raw is not None else None
         email: str = payload.get("email")
         if user_id is None:
             return None
         return TokenData(user_id=user_id, email=email)
-    except JWTError:
+    except (JWTError, ValueError, TypeError):
         return None
 
 

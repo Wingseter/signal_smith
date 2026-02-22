@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 
-from app.core.database import get_db
+from app.core.database import get_sync_db_dep
 from app.api.routes.auth import get_current_user
 from app.models.user import User
 from app.models.backtest import BacktestResult as BacktestResultModel, BacktestComparison
@@ -189,7 +189,7 @@ async def get_strategies(
 @router.post("/run", response_model=BacktestResponse)
 async def run_backtest(
     request: BacktestRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> BacktestResponse:
     """
@@ -320,7 +320,7 @@ async def compare_strategies(
     strategies: Optional[List[str]] = None,
     initial_capital: float = 10_000_000,
     save_result: bool = True,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -412,7 +412,7 @@ async def get_backtest_history(
     offset: int = Query(default=0, ge=0),
     strategy: Optional[str] = None,
     favorites_only: bool = False,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -474,7 +474,7 @@ async def get_backtest_history(
 @router.get("/history/{backtest_id}")
 async def get_backtest_detail(
     backtest_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -520,7 +520,7 @@ async def get_backtest_detail(
 async def update_backtest(
     backtest_id: int,
     request: UpdateBacktestRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -556,7 +556,7 @@ async def update_backtest(
 @router.delete("/history/{backtest_id}")
 async def delete_backtest(
     backtest_id: int,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, str]:
     """
@@ -583,7 +583,7 @@ async def delete_backtest(
 @router.get("/comparisons")
 async def get_comparison_history(
     limit: int = Query(default=10, ge=1, le=50),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """

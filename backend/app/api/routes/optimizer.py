@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_sync_db_dep
 from app.api.routes.auth import get_current_user
 from app.models.user import User
 from app.models.stock import Stock, StockPrice
@@ -162,7 +162,7 @@ async def get_optimization_methods() -> Dict[str, Any]:
 @router.post("/optimize", response_model=OptimizationResponse)
 async def optimize_portfolio(
     request: OptimizeRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> OptimizationResponse:
     """
@@ -259,7 +259,7 @@ async def optimize_portfolio(
 @router.post("/position-size", response_model=PositionSizeResponse)
 async def calculate_position_size(
     request: PositionSizeRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> PositionSizeResponse:
     """
@@ -303,7 +303,7 @@ async def calculate_position_size(
 @router.get("/diversification")
 async def analyze_diversification(
     portfolio_id: Optional[int] = None,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -415,7 +415,7 @@ async def analyze_diversification(
 async def suggest_rebalancing(
     portfolio_id: Optional[int] = None,
     target_method: str = "max_sharpe",
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """

@@ -84,14 +84,14 @@ def collect_stock_prices(self):
 
                     if price_data:
                         stock_price = StockPrice(
-                            stock_id=next((s.id for s in stocks if s.symbol == symbol), None),
-                            date=datetime.now().date(),
+                            symbol=symbol,
+                            date=datetime.utcnow(),
                             open=price_data.get("open", 0),
                             high=price_data.get("high", 0),
                             low=price_data.get("low", 0),
                             close=price_data.get("close", 0),
                             volume=price_data.get("volume", 0),
-                            change_percent=price_data.get("change_percent", 0),
+                            change_percent=price_data.get("change_percent", price_data.get("change_rate", 0)),
                         )
                         db.add(stock_price)
                         collected_count += 1
@@ -142,17 +142,27 @@ def collect_historical_prices(symbol: str, days: int = 365):
 
             count = 0
             for item in history:
+                date_value = item.get("date")
+                if isinstance(date_value, str):
+                    try:
+                        if len(date_value) == 8 and date_value.isdigit():
+                            date_value = datetime.strptime(date_value, "%Y%m%d")
+                        else:
+                            date_value = datetime.fromisoformat(date_value)
+                    except ValueError:
+                        continue
+
                 existing = db.execute(
                     select(StockPrice).where(
-                        StockPrice.stock_id == stock.id,
-                        StockPrice.date == item["date"]
+                        StockPrice.symbol == stock.symbol,
+                        StockPrice.date == date_value
                     )
                 ).scalar_one_or_none()
 
                 if not existing:
                     price = StockPrice(
-                        stock_id=stock.id,
-                        date=item["date"],
+                        symbol=stock.symbol,
+                        date=date_value,
                         open=item["open"],
                         high=item["high"],
                         low=item["low"],
@@ -251,19 +261,20 @@ def run_ai_analysis(self):
 
             from app.agents.coordinator import AgentCoordinator
 
-            coordinator = AgentCoordinator(db)
+            coordinator = AgentCoordinator()
             results = []
             signals_generated = 0
 
             for symbol in watchlist_items[:10]:
                 try:
-                    result = run_async(coordinator.run_full_analysis(symbol))
+                    result = run_async(coordinator.run_analysis(symbol=symbol, save_to_db=True))
+                    final = result.get("final_recommendation") or {}
                     results.append({
                         "symbol": symbol,
-                        "score": result.get("final_score"),
-                        "recommendation": result.get("recommendation"),
+                        "score": final.get("overall_score"),
+                        "recommendation": final.get("recommendation"),
                     })
-                    if result.get("signal_generated"):
+                    if result.get("trading_signal"):
                         signals_generated += 1
                 except Exception as e:
                     logger.error(f"Analysis failed for {symbol}: {e}")
@@ -285,23 +296,23 @@ def run_ai_analysis(self):
 def run_single_analysis(symbol: str, analysis_types: Optional[List[str]] = None):
     """Run AI analysis for a single stock (background task)."""
     try:
-        with get_sync_db() as db:
-            from app.agents.coordinator import AgentCoordinator
+        from app.agents.coordinator import AgentCoordinator
 
-            coordinator = AgentCoordinator(db)
-            result = run_async(coordinator.run_full_analysis(
-                symbol,
-                analysis_types=analysis_types or ["news", "quant", "fundamental", "technical"]
-            ))
+        coordinator = AgentCoordinator()
+        result = run_async(coordinator.run_analysis(symbol=symbol, save_to_db=True))
+        final = result.get("final_recommendation") or {}
+        confidence = final.get("confidence")
+        if analysis_types:
+            logger.info("run_single_analysis received analysis_types=%s (currently ignored by coordinator)", analysis_types)
 
-            return {
-                "status": "success",
-                "symbol": symbol,
-                "final_score": result.get("final_score"),
-                "recommendation": result.get("recommendation"),
-                "confidence": result.get("confidence"),
-                "signal_generated": result.get("signal_generated"),
-            }
+        return {
+            "status": "success",
+            "symbol": symbol,
+            "final_score": final.get("overall_score"),
+            "recommendation": final.get("recommendation"),
+            "confidence": confidence,
+            "signal_generated": result.get("trading_signal") is not None,
+        }
 
     except Exception as e:
         logger.error(f"Single analysis failed for {symbol}: {e}")
@@ -312,18 +323,17 @@ def run_single_analysis(symbol: str, analysis_types: Optional[List[str]] = None)
 def run_quick_analysis(symbol: str):
     """Run quick analysis (technical + quant only) for faster results."""
     try:
-        with get_sync_db() as db:
-            from app.agents.coordinator import AgentCoordinator
+        from app.agents.coordinator import AgentCoordinator
 
-            coordinator = AgentCoordinator(db)
-            result = run_async(coordinator.run_quick_analysis(symbol))
+        coordinator = AgentCoordinator()
+        result = run_async(coordinator.run_quick_analysis(symbol))
 
-            return {
-                "status": "success",
-                "symbol": symbol,
-                "final_score": result.get("final_score"),
-                "recommendation": result.get("recommendation"),
-            }
+        return {
+            "status": "success",
+            "symbol": symbol,
+            "final_score": result.get("overall_score"),
+            "recommendation": result.get("recommendation"),
+        }
 
     except Exception as e:
         logger.error(f"Quick analysis failed for {symbol}: {e}")
@@ -431,23 +441,26 @@ def auto_execute_signal(signal_id: int, quantity: int):
                 select(TradingSignal).where(TradingSignal.id == signal_id)
             ).scalar_one_or_none()
 
-            if not signal or signal.executed:
+            if not signal or signal.is_executed:
                 return {"status": "error", "reason": "invalid_signal"}
 
-            from app.services.trading_service import TradingService
+            from app.services.trading_service import trading_service
 
-            trading_service = TradingService(db)
-
-            order_result = run_async(trading_service.execute_order(
-                symbol=signal.symbol,
-                transaction_type=signal.signal_type,
-                quantity=quantity,
-                price=signal.entry_price,
-            ))
+            side = "buy" if signal.signal_type == "buy" else "sell"
+            price = int(signal.target_price) if signal.target_price else 0
+            order_result = run_async(
+                trading_service.place_order(
+                    user_id=1,  # TradingSignal currently has no user_id mapping
+                    symbol=signal.symbol,
+                    side=side,
+                    quantity=quantity,
+                    price=price,
+                    order_type="limit" if price > 0 else "market",
+                )
+            )
 
             if order_result.get("success"):
-                signal.executed = True
-                signal.executed_at = datetime.utcnow()
+                signal.is_executed = True
                 db.commit()
 
                 send_notification.delay(

@@ -19,9 +19,9 @@ openssl rsa -pubout -in ~/.oci/oci_api_key.pem -out ~/.oci/oci_api_key_public.pe
 ```ini
 # ~/.oci/config
 [DEFAULT]
-user=ocid1.user.oc1..aaaaaaaamun42aphgzbej4xulq4nwnz54dflqlpfy4jjalkeb4gyhl4yji6q
-fingerprint=60:5d:89:b1:44:c6:35:27:00:60:81:57:00:4b:d8:82
-tenancy=ocid1.tenancy.oc1..aaaaaaaa2j6iu6txod6d5efegqkgjcvjz4ymd2q3hpz6bbz7qzccuxeacbhq
+user=ocid1.user.oc1..<your-user-ocid>
+fingerprint=<your-api-key-fingerprint>
+tenancy=ocid1.tenancy.oc1..<your-tenancy-ocid>
 region=ap-chuncheon-1
 key_file=~/.oci/oci_api_key.pem
 ```
@@ -38,7 +38,7 @@ key_file=~/.oci/oci_api_key.pem
 
 ### 2.1 VCN (Virtual Cloud Network)
 ```bash
-COMPARTMENT="ocid1.tenancy.oc1..aaaaaaaa2j6iu6txod6d5efegqkgjcvjz4ymd2q3hpz6bbz7qzccuxeacbhq"
+COMPARTMENT="ocid1.tenancy.oc1..<your-tenancy-ocid>"
 
 # VCN 생성
 VCN_ID=$(oci network vcn create \
@@ -130,8 +130,8 @@ oci compute image list \
 
 ### 3.3 인스턴스 생성
 ```bash
-IMAGE_ID="ocid1.image.oc1.ap-chuncheon-1.aaaaaaaatm4c52kym27acnlrbzqvysys2gwwip7ukz5ax6yxzyqhys3oal5a"
-SSH_KEY=$(cat /Users/kwon/Key/money_trade)
+IMAGE_ID="<your-image-ocid>"
+SSH_KEY=$(cat /path/to/your/public_key.pub)
 
 oci compute instance launch \
   --compartment-id $COMPARTMENT \
@@ -155,7 +155,7 @@ oci compute instance launch \
 | OCPU | 4 |
 | Memory | 24GB |
 | Boot Volume | 200GB |
-| Public IP | 158.180.69.91 |
+| Public IP | <your-server-public-ip> |
 | Region | ap-chuncheon-1 (춘천) |
 
 ---
@@ -164,7 +164,7 @@ oci compute instance launch \
 
 ### 4.1 SSH 접속
 ```bash
-ssh -i /Users/kwon/Key/money_trade.key ubuntu@158.180.69.91
+ssh -i /path/to/your/private_key ubuntu@<your-server-public-ip>
 ```
 
 ### 4.2 Docker 설치
@@ -196,9 +196,9 @@ rsync -avz --progress \
   --exclude '__pycache__' \
   --exclude '.claude' \
   --exclude '.serena' \
-  -e "ssh -i /Users/kwon/Key/money_trade.key" \
-  /Users/kwon/Workspace/Python/2026/signal_smith/ \
-  ubuntu@158.180.69.91:~/signal_smith/
+  -e "ssh -i /path/to/your/private_key" \
+  /path/to/local/signal_smith/ \
+  ubuntu@<your-server-public-ip>:~/signal_smith/
 ```
 
 ### 5.2 파일 권한 설정
@@ -232,11 +232,11 @@ sudo docker compose up -d --build
 ### 6.1 DuckDNS 도메인 설정
 ```bash
 # DuckDNS IP 업데이트
-curl "https://www.duckdns.org/update?domains=emolgalab&token=a0793ea6-d738-4a0e-8203-a289e6e33718&ip=158.180.69.91"
+curl "https://www.duckdns.org/update?domains=<your-domain>&token=<your-duckdns-token>&ip=<your-server-public-ip>"
 ```
 
 - 도메인: `emolgalab.duckdns.org`
-- Token: `a0793ea6-d738-4a0e-8203-a289e6e33718`
+- Token: `<your-duckdns-token>`
 
 ### 6.2 Nginx & Certbot 설치
 ```bash
@@ -304,7 +304,7 @@ server {
 
 ### 6.4 SSL 인증서 발급
 ```bash
-sudo certbot --nginx -d emolgalab.duckdns.org --non-interactive --agree-tos --email wingsetee@gmail.com --redirect
+sudo certbot --nginx -d emolgalab.duckdns.org --non-interactive --agree-tos --email your-email@example.com --redirect
 ```
 
 ### 6.5 docker-compose.yml API URL 수정
@@ -330,25 +330,25 @@ environment:
 
 ### 서비스 상태 확인
 ```bash
-ssh -i /Users/kwon/Key/money_trade.key ubuntu@158.180.69.91 \
+ssh -i /path/to/your/private_key ubuntu@<your-server-public-ip> \
   "cd ~/signal_smith && sudo docker compose ps"
 ```
 
 ### 로그 확인
 ```bash
-ssh -i /Users/kwon/Key/money_trade.key ubuntu@158.180.69.91 \
+ssh -i /path/to/your/private_key ubuntu@<your-server-public-ip> \
   "cd ~/signal_smith && sudo docker compose logs -f backend"
 ```
 
 ### 서비스 재시작
 ```bash
-ssh -i /Users/kwon/Key/money_trade.key ubuntu@158.180.69.91 \
+ssh -i /path/to/your/private_key ubuntu@<your-server-public-ip> \
   "cd ~/signal_smith && sudo docker compose restart"
 ```
 
 ### 전체 재빌드
 ```bash
-ssh -i /Users/kwon/Key/money_trade.key ubuntu@158.180.69.91 \
+ssh -i /path/to/your/private_key ubuntu@<your-server-public-ip> \
   "cd ~/signal_smith && sudo docker compose up -d --build"
 ```
 

@@ -20,9 +20,9 @@ services:
     container_name: signal_smith_backend
     network_mode: host
     environment:
-      - DATABASE_URL=mysql+aiomysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
-      - DATABASE_SYNC_URL=mysql+pymysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
-      - REDIS_URL=redis://localhost:6379/0
+      - DATABASE_URL=${DATABASE_URL:-mysql+aiomysql://admin:password@localhost:3306/signal_smith}
+      - DATABASE_SYNC_URL=${DATABASE_SYNC_URL:-mysql+pymysql://admin:password@localhost:3306/signal_smith}
+      - REDIS_URL=${REDIS_URL:-redis://localhost:6379/0}
     env_file:
       - ./backend/.env
     volumes:
@@ -37,9 +37,9 @@ services:
     container_name: signal_smith_celery
     network_mode: host
     environment:
-      - DATABASE_URL=mysql+aiomysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
-      - DATABASE_SYNC_URL=mysql+pymysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
-      - REDIS_URL=redis://localhost:6379/0
+      - DATABASE_URL=${DATABASE_URL:-mysql+aiomysql://admin:password@localhost:3306/signal_smith}
+      - DATABASE_SYNC_URL=${DATABASE_SYNC_URL:-mysql+pymysql://admin:password@localhost:3306/signal_smith}
+      - REDIS_URL=${REDIS_URL:-redis://localhost:6379/0}
     env_file:
       - ./backend/.env
     volumes:
@@ -54,9 +54,9 @@ services:
     container_name: signal_smith_celery_beat
     network_mode: host
     environment:
-      - DATABASE_URL=mysql+aiomysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
-      - DATABASE_SYNC_URL=mysql+pymysql://admin:Ss2026pass#1@10.0.1.251:3306/signal_smith
-      - REDIS_URL=redis://localhost:6379/0
+      - DATABASE_URL=${DATABASE_URL:-mysql+aiomysql://admin:password@localhost:3306/signal_smith}
+      - DATABASE_SYNC_URL=${DATABASE_SYNC_URL:-mysql+pymysql://admin:password@localhost:3306/signal_smith}
+      - REDIS_URL=${REDIS_URL:-redis://localhost:6379/0}
     env_file:
       - ./backend/.env
     volumes:

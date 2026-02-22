@@ -244,7 +244,7 @@ class TradingService:
                 {
                     "id": t.id,
                     "symbol": t.symbol,
-                    "type": t.transaction_type,
+                    "transaction_type": t.transaction_type,
                     "quantity": t.quantity,
                     "price": float(t.price),
                     "total_amount": float(t.total_amount),
