@@ -110,3 +110,29 @@ export interface AccountSummary {
   holdings: Holding[];
   count: number;
 }
+
+export interface RealizedPnlItem {
+  date: string;
+  symbol: string;
+  name: string;
+  quantity: number;
+  buy_price: number;
+  sell_price: number;
+  profit_loss: number;
+  profit_rate: number;
+  commission: number;
+  tax: number;
+}
+
+export interface RealizedPnlSummary {
+  total_profit_loss: number;
+  total_commission: number;
+  total_tax: number;
+  net_profit: number;
+  trade_count: number;
+}
+
+export interface RealizedPnlResponse {
+  items: RealizedPnlItem[];
+  summary: RealizedPnlSummary;
+}

@@ -388,6 +388,77 @@ async def get_queued_executions():
     }
 
 
+@router.get("/account/realized-pnl")
+async def get_realized_pnl(period: str = Query(default="1m")):
+    """실현 수익 조회 (키움 ka10073)
+
+    Args:
+        period: 조회 기간 (1w=1주, 1m=1개월, 3m=3개월)
+    """
+    import json
+    from datetime import datetime, timedelta
+    from app.core.redis import get_redis
+    from app.services.kiwoom.rest_client import kiwoom_client
+
+    # period → 날짜 변환
+    end_date = datetime.now().strftime("%Y%m%d")
+    if period == "1w":
+        start_date = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d")
+    elif period == "3m":
+        start_date = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+    else:  # 1m 기본값
+        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+
+    # Redis 60초 캐시
+    cache_key = f"account:realized_pnl:{period}"
+    try:
+        redis = await get_redis()
+        cached = await redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    items = await kiwoom_client.get_realized_pnl(start_date=start_date, end_date=end_date)
+
+    total_profit_loss = sum(i.profit_loss for i in items)
+    total_commission = sum(i.commission for i in items)
+    total_tax = sum(i.tax for i in items)
+
+    result = {
+        "items": [
+            {
+                "date": i.date,
+                "symbol": i.symbol,
+                "name": i.name,
+                "quantity": i.quantity,
+                "buy_price": i.buy_price,
+                "sell_price": i.sell_price,
+                "profit_loss": i.profit_loss,
+                "profit_rate": i.profit_rate,
+                "commission": i.commission,
+                "tax": i.tax,
+            }
+            for i in items
+        ],
+        "summary": {
+            "total_profit_loss": total_profit_loss,
+            "total_commission": total_commission,
+            "total_tax": total_tax,
+            "net_profit": total_profit_loss - total_commission - total_tax,
+            "trade_count": len(items),
+        },
+    }
+
+    try:
+        redis = await get_redis()
+        await redis.set(cache_key, json.dumps(result), ex=60)
+    except Exception:
+        pass
+
+    return result
+
+
 @router.get("/account/balance")
 async def get_account_balance():
     """키움 계좌 잔고 조회"""

@@ -5,6 +5,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+import time
+
 from sqlalchemy import select
 
 from app.core.celery_app import celery_app
@@ -77,6 +79,7 @@ def monitor_signals(self):
                         send_notification.delay(
                             "stop_loss", f"[손절] {signal.symbol}: {price:,}원 도달"
                         )
+                        _trigger_sell_for_signal(signal, price, "stop_loss")
 
                     elif signal.target_price and price >= signal.target_price:
                         actions.append({
@@ -85,9 +88,11 @@ def monitor_signals(self):
                             "symbol": signal.symbol,
                             "price": price,
                         })
+                        signal.is_executed = True
                         send_notification.delay(
                             "target_reached", f"[목표가] {signal.symbol}: {price:,}원 도달"
                         )
+                        _trigger_sell_for_signal(signal, price, "take_profit")
 
                     elif signal.created_at < datetime.utcnow() - timedelta(hours=24):
                         signal.is_executed = True
@@ -617,6 +622,7 @@ async def _check_buy_signals_for_council(results) -> int:
                 news_score=8 if result.action == SignalAction.STRONG_BUY else 7,
                 available_amount=500000,
                 current_price=result.indicators.current_price if result.indicators else 0,
+                trigger_source="quant",
             )
             triggered += 1
             logger.info(f"Quant BUY → council: {result.symbol}, score={result.composite_score}")
@@ -627,22 +633,95 @@ async def _check_buy_signals_for_council(results) -> int:
         return 0
 
 
+def _trigger_sell_for_signal(signal: TradingSignal, current_price: int, trigger_type: str):
+    """시그널 기반 매도 실행 트리거"""
+    try:
+        from app.services.council.orchestrator import council_orchestrator
+
+        # DB에서 종목명 조회
+        company_name = signal.symbol
+        try:
+            with get_sync_db() as db:
+                stock = db.execute(
+                    select(Stock).where(Stock.symbol == signal.symbol)
+                ).scalar_one_or_none()
+                if stock:
+                    company_name = stock.name
+        except Exception:
+            pass
+
+        run_async(
+            council_orchestrator.start_sell_meeting(
+                symbol=signal.symbol,
+                company_name=company_name,
+                sell_reason=f"{trigger_type}: 시그널 가격 도달 ({current_price:,}원)",
+                current_holdings=0,  # sell meeting에서 자체 조회
+                avg_buy_price=0,
+                current_price=current_price,
+            )
+        )
+        logger.info(f"Sell meeting triggered for {signal.symbol}: {trigger_type} at {current_price:,}원")
+    except Exception as e:
+        logger.error(f"Failed to trigger sell for {signal.symbol}: {e}")
+
+
+def _get_active_signal_prices(symbol: str) -> tuple:
+    """해당 종목의 활성 BUY 시그널에서 GPT 손절가/목표가 조회"""
+    try:
+        with get_sync_db() as db:
+            signal = db.execute(
+                select(TradingSignal)
+                .where(
+                    TradingSignal.symbol == symbol,
+                    TradingSignal.signal_type == "buy",
+                    TradingSignal.is_executed == False,
+                )
+                .order_by(TradingSignal.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+
+            if signal:
+                return (signal.stop_loss, signal.target_price)
+    except Exception as e:
+        logger.warning(f"Failed to get signal prices for {symbol}: {e}")
+
+    return (None, None)
+
+
 async def _evaluate_price_triggers(holding):
-    stop_loss_threshold = float(getattr(settings, "stop_loss_percent", 5.0)) * -1.0
-    take_profit_threshold = float(getattr(settings, "take_profit_percent", 20.0))
+    # 1. DB에서 해당 종목 활성 BUY 시그널의 GPT 손절가/목표가 조회
+    gpt_stop_loss, gpt_target_price = _get_active_signal_prices(holding.symbol)
+
+    # 2. GPT 가격 기반 체크 (우선)
+    if gpt_stop_loss and holding.current_price <= float(gpt_stop_loss):
+        return (
+            "stop_loss",
+            f"GPT 손절가 도달 ({int(gpt_stop_loss):,}원): 현재가 {holding.current_price:,}원",
+        )
+
+    if gpt_target_price and holding.current_price >= float(gpt_target_price):
+        return (
+            "take_profit",
+            f"GPT 목표가 도달 ({int(gpt_target_price):,}원): 현재가 {holding.current_price:,}원",
+        )
+
+    # 3. Fallback: config % 기반 (GPT 값 없는 종목)
+    stop_loss_threshold = -settings.stop_loss_percent
+    take_profit_threshold = settings.take_profit_percent
 
     if holding.profit_rate <= stop_loss_threshold:
         return (
             "stop_loss",
-            f"기계적 손절매 발동 ({stop_loss_threshold}% 도달): {holding.profit_rate:+.2f}%",
+            f"% 기반 손절 ({stop_loss_threshold}%): {holding.profit_rate:+.2f}%",
         )
 
     if holding.profit_rate >= take_profit_threshold:
         return (
             "take_profit",
-            f"기계적 익절매 기회 ({take_profit_threshold}% 도달): {holding.profit_rate:+.2f}%",
+            f"% 기반 익절 ({take_profit_threshold}%): {holding.profit_rate:+.2f}%",
         )
 
+    # 4. 기술적 악화 체크 (기존 유지)
     try:
         from app.services.kiwoom.rest_client import kiwoom_client
         from app.services.council.technical_indicators import technical_calculator
@@ -662,3 +741,177 @@ async def _evaluate_price_triggers(holding):
         logger.warning(f"Technical analysis failed for {holding.symbol}: {e}")
 
     return None
+
+
+@celery_app.task(
+    name="app.services.tasks.rebalance_holdings",
+    bind=True,
+    time_limit=600,
+    soft_time_limit=540,
+)
+def rebalance_holdings(self):
+    """장 마감 후 보유종목 일일 리밸런싱 재평가.
+
+    매일 15:40 KST에 실행.
+    보유종목별로 GPT 퀀트 분석을 재실행하여 target_price / stop_loss 갱신.
+    GPT score ≤ 3이면 sell meeting 에스컬레이션.
+    """
+    # 평일 체크 (장 후 실행이므로 is_market_hours 사용 안 함)
+    from app.services.council.trading_hours import trading_hours
+
+    if not trading_hours.is_trading_day():
+        logger.info("비거래일 — 리밸런싱 스킵")
+        return {"status": "skipped", "reason": "not_trading_day"}
+
+    try:
+        holdings = run_async(_get_cached_holdings())
+
+        if not holdings:
+            logger.info("보유종목 없음 — 리밸런싱 스킵")
+            return {"status": "skipped", "reason": "no_holdings"}
+
+        logger.info(f"[리밸런싱] 보유종목 {len(holdings)}건 재평가 시작")
+
+        from app.services.council.orchestrator import council_orchestrator
+
+        reviewed = []
+        escalated = []
+
+        for holding in holdings:
+            try:
+                # 기존 시그널 가격 조회
+                prev_stop, prev_target = _get_active_signal_prices(holding.symbol)
+
+                # GPT 리밸런싱 재평가
+                result = run_async(
+                    council_orchestrator.start_rebalance_review(
+                        symbol=holding.symbol,
+                        company_name=holding.name,
+                        current_holdings=holding.quantity,
+                        avg_buy_price=holding.avg_price,
+                        current_price=holding.current_price,
+                        prev_target_price=int(prev_target) if prev_target else None,
+                        prev_stop_loss=int(prev_stop) if prev_stop else None,
+                    )
+                )
+
+                if not result:
+                    continue
+
+                # DB 시그널 가격 갱신
+                change_reason = (
+                    f"[리밸런싱 {datetime.now().strftime('%m/%d')}] "
+                    f"score={result['score']}, "
+                    f"target: {int(prev_target):,}→{result['new_target_price']:,}" if prev_target else
+                    f"[리밸런싱 {datetime.now().strftime('%m/%d')}] "
+                    f"score={result['score']}, "
+                    f"target: 미설정→{result['new_target_price']:,}" if result.get('new_target_price') else ""
+                )
+                if result.get("new_stop_loss"):
+                    stop_part = (
+                        f", stop: {int(prev_stop):,}→{result['new_stop_loss']:,}" if prev_stop
+                        else f", stop: 미설정→{result['new_stop_loss']:,}"
+                    )
+                    change_reason += stop_part
+
+                if result.get("new_target_price") or result.get("new_stop_loss"):
+                    _update_signal_prices(
+                        symbol=holding.symbol,
+                        new_target=result.get("new_target_price"),
+                        new_stop=result.get("new_stop_loss"),
+                        reason=change_reason,
+                    )
+
+                reviewed.append({
+                    "symbol": holding.symbol,
+                    "name": holding.name,
+                    "score": result["score"],
+                    "new_target": result.get("new_target_price"),
+                    "new_stop": result.get("new_stop_loss"),
+                    "recommend_sell": result.get("recommend_sell", False),
+                })
+
+                # GPT score ≤ 3 → sell meeting 에스컬레이션
+                if result.get("recommend_sell"):
+                    logger.warning(
+                        f"[리밸런싱] {holding.symbol} score={result['score']} ≤ 3 → 매도 회의 에스컬레이션"
+                    )
+                    run_async(
+                        council_orchestrator.start_sell_meeting(
+                            symbol=holding.symbol,
+                            company_name=holding.name,
+                            sell_reason=f"리밸런싱 재평가 저점수 (score={result['score']})",
+                            current_holdings=holding.quantity,
+                            avg_buy_price=holding.avg_price,
+                            current_price=result.get("current_price", holding.current_price),
+                        )
+                    )
+                    escalated.append(holding.symbol)
+
+            except Exception as e:
+                logger.error(f"[리밸런싱] {holding.symbol} 개별 오류: {e}")
+
+            # API rate limit 방지
+            time.sleep(1)
+
+        logger.info(
+            f"[리밸런싱] 완료: {len(reviewed)}/{len(holdings)}건 재평가, "
+            f"{len(escalated)}건 매도 에스컬레이션"
+        )
+
+        return {
+            "status": "success",
+            "total_holdings": len(holdings),
+            "reviewed": len(reviewed),
+            "escalated": len(escalated),
+            "escalated_symbols": escalated,
+            "details": reviewed,
+        }
+
+    except Exception as e:
+        logger.error(f"[리밸런싱] 전체 오류: {e}")
+        self.retry(exc=e)
+
+
+def _update_signal_prices(
+    symbol: str,
+    new_target: Optional[int],
+    new_stop: Optional[int],
+    reason: str,
+):
+    """기존 활성 BUY 시그널의 target_price / stop_loss 갱신 + reason에 변경 이력 append."""
+    try:
+        with get_sync_db() as db:
+            signal = db.execute(
+                select(TradingSignal)
+                .where(
+                    TradingSignal.symbol == symbol,
+                    TradingSignal.signal_type == "buy",
+                    TradingSignal.is_executed == False,
+                )
+                .order_by(TradingSignal.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+
+            if not signal:
+                logger.info(f"[리밸런싱] {symbol} 활성 BUY 시그널 없음 → 갱신 스킵")
+                return
+
+            # 이력 기록: 기존 reason에 append
+            prev_reason = signal.reason or ""
+            separator = " | " if prev_reason else ""
+            signal.reason = prev_reason + separator + reason
+
+            if new_target is not None:
+                signal.target_price = float(new_target)
+            if new_stop is not None:
+                signal.stop_loss = float(new_stop)
+
+            db.commit()
+            logger.info(
+                f"[리밸런싱] {symbol} DB 갱신 완료: "
+                f"target={new_target}, stop={new_stop}"
+            )
+
+    except Exception as e:
+        logger.error(f"[리밸런싱] {symbol} DB 갱신 실패: {e}")

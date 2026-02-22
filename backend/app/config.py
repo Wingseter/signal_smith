@@ -69,8 +69,16 @@ class Settings(BaseSettings):
     # Trading Settings
     trading_enabled: bool = True
     max_position_size: int = 1000000
-    stop_loss_percent: float = 3.0
-    take_profit_percent: float = 5.0
+
+    # 기본 손절/익절 % (GPT 값이 없을 때 fallback)
+    stop_loss_percent: float = 5.0
+    take_profit_percent: float = 20.0
+
+    # 안전 바운드 (GPT 값이 이 범위를 벗어나면 clamp)
+    min_stop_loss_percent: float = 3.0    # 최소 손절폭
+    max_stop_loss_percent: float = 15.0   # 최대 손절폭
+    min_take_profit_percent: float = 5.0  # 최소 목표 수익
+    max_take_profit_percent: float = 50.0 # 최대 목표 수익
 
     # JWT Settings
     access_token_expire_minutes: int = 30

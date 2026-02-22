@@ -104,6 +104,13 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=8, minute=50),
         "options": {"queue": "default"},
     },
+
+    # 보유종목 일일 리밸런싱 - 매일 15:40 (장 마감 후)
+    "rebalance-holdings": {
+        "task": "app.services.tasks.rebalance_holdings",
+        "schedule": crontab(hour=15, minute=40),
+        "options": {"queue": "default"},
+    },
 }
 
 # Queue routing
@@ -123,4 +130,5 @@ celery_app.conf.task_routes = {
     "app.services.tasks.scan_signals": {"queue": "default"},
     "app.services.tasks.monitor_holdings_sell": {"queue": "default"},
     "app.services.tasks.refresh_stock_universe": {"queue": "default"},
+    "app.services.tasks.rebalance_holdings": {"queue": "default"},
 }

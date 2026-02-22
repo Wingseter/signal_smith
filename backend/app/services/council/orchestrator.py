@@ -142,6 +142,7 @@ class CouncilOrchestrator:
         news_score: int,
         available_amount: int = 1000000,
         current_price: int = 0,
+        trigger_source: str = "news",
     ) -> CouncilMeeting:
         """AI 투자 회의 시작"""
 
@@ -151,6 +152,7 @@ class CouncilOrchestrator:
             company_name=company_name,
             news_title=news_title,
             news_score=news_score,
+            trigger_source=trigger_source,
         )
 
         # 0. 키움증권에서 실제 차트 데이터 조회
@@ -393,6 +395,8 @@ class CouncilOrchestrator:
             allocation_percent=abs(final_percent),
             suggested_amount=suggested_amount,
             suggested_quantity=suggested_quantity,
+            target_price=self._clamp_target_price(target_price, current_price),
+            stop_loss_price=self._clamp_stop_loss(stop_loss, current_price),
             quant_summary=quant_msg.content[:100] + "..." if len(quant_msg.content) > 100 else quant_msg.content,
             fundamental_summary=fundamental_msg.content[:100] + "..." if len(fundamental_msg.content) > 100 else fundamental_msg.content,
             consensus_reason=consensus_msg.content[:200] + "..." if len(consensus_msg.content) > 200 else consensus_msg.content,
@@ -491,7 +495,7 @@ class CouncilOrchestrator:
 
         # 콜백 알림
         await self._notify_signal(signal)
-        await self._persist_signal_to_db(signal)
+        await self._persist_signal_to_db(signal, trigger_source=meeting.trigger_source)
 
         logger.info(f"AI 회의 완료: {company_name} - {signal.action} {signal.allocation_percent}%")
 
@@ -613,6 +617,33 @@ class CouncilOrchestrator:
         self.auto_execute = enabled
         logger.info(f"자동 체결 {'활성화' if enabled else '비활성화'}")
 
+    def _clamp_stop_loss(self, gpt_stop_loss: Optional[int], current_price: int) -> Optional[int]:
+        """GPT 손절가를 config 바운드 내로 제한"""
+        if not current_price:
+            return None
+
+        min_price = int(current_price * (1 - settings.max_stop_loss_percent / 100))
+        max_price = int(current_price * (1 - settings.min_stop_loss_percent / 100))
+
+        if gpt_stop_loss:
+            return max(min_price, min(max_price, gpt_stop_loss))
+
+        # GPT 값 없으면 기본 % 적용
+        return int(current_price * (1 - settings.stop_loss_percent / 100))
+
+    def _clamp_target_price(self, gpt_target: Optional[int], current_price: int) -> Optional[int]:
+        """GPT 목표가를 config 바운드 내로 제한"""
+        if not current_price:
+            return None
+
+        min_price = int(current_price * (1 + settings.min_take_profit_percent / 100))
+        max_price = int(current_price * (1 + settings.max_take_profit_percent / 100))
+
+        if gpt_target:
+            return max(min_price, min(max_price, gpt_target))
+
+        return int(current_price * (1 + settings.take_profit_percent / 100))
+
     def _determine_action(
         self,
         final_percent: float,
@@ -663,21 +694,119 @@ class CouncilOrchestrator:
         logger.info(f"HOLD 결정: 조건 미충족 (비율: {final_percent}%, 평균: {avg_score:.1f})")
         return "HOLD"
 
-    async def _persist_signal_to_db(self, signal: InvestmentSignal):
+    async def _persist_signal_to_db(self, signal: InvestmentSignal, trigger_source: str = "news"):
         """Council 시그널을 DB에 저장"""
         try:
             db_id = await trading_service.create_trading_signal(
                 symbol=signal.symbol,
                 signal_type=signal.action.lower(),
                 strength=signal.confidence * 100,
-                source_agent="council",
+                source_agent=trigger_source,
                 reason=signal.consensus_reason[:1000],
                 target_price=float(signal.target_price) if signal.target_price else None,
                 stop_loss=float(signal.stop_loss_price) if signal.stop_loss_price else None,
+                quantity=signal.suggested_quantity,
+                signal_status=signal.status.value,
             )
+            signal._db_id = db_id  # DB ID 참조 저장
             logger.info(f"Council signal → DB: {signal.symbol} {signal.action} (id={db_id})")
         except Exception as e:
             logger.error(f"Council signal DB 저장 실패: {signal.symbol} - {e}")
+
+    async def start_rebalance_review(
+        self,
+        symbol: str,
+        company_name: str,
+        current_holdings: int,
+        avg_buy_price: int,
+        current_price: int,
+        prev_target_price: Optional[int] = None,
+        prev_stop_loss: Optional[int] = None,
+    ) -> Optional[dict]:
+        """보유종목 일일 리밸런싱 재평가 (GPT LIGHT 단독)
+
+        장 마감 후 보유종목별로 최신 차트를 기반으로
+        target_price / stop_loss를 재산출하고 결과 dict를 반환.
+        GPT score ≤ 3이면 recommend_sell: True 포함.
+        """
+        try:
+            # 1. 최신 차트 데이터 조회
+            technical_data = await self._fetch_technical_data(symbol)
+            if not technical_data:
+                logger.warning(f"[리밸런싱] {symbol} 차트 데이터 없음 → 스킵")
+                return None
+
+            # 실시간 현재가 업데이트
+            if technical_data.current_price > 0:
+                current_price = technical_data.current_price
+
+            # 수익률 계산
+            profit_rate = (current_price - avg_buy_price) / avg_buy_price * 100 if avg_buy_price > 0 else 0
+
+            # 2. GPT 퀀트 분석 (보유 맥락 전달)
+            prev_target_str = f"{prev_target_price:,}원" if prev_target_price else "미설정"
+            prev_stop_str = f"{prev_stop_loss:,}원" if prev_stop_loss else "미설정"
+
+            request_prompt = (
+                f"보유종목 일일 재평가. "
+                f"보유수량 {current_holdings:,}주, 평균매입가 {avg_buy_price:,}원, "
+                f"현재가 {current_price:,}원, 수익률 {profit_rate:+.1f}%. "
+                f"이전 목표가 {prev_target_str}, 이전 손절가 {prev_stop_str}. "
+                f"최신 차트 기반으로 목표가와 손절가를 재설정해주세요."
+            )
+
+            quant_msg = await asyncio.wait_for(
+                quant_analyst.analyze(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=f"일일 리밸런싱 재평가 (수익률 {profit_rate:+.1f}%)",
+                    previous_messages=[],
+                    technical_data=technical_data,
+                    request=request_prompt,
+                ),
+                timeout=15.0,
+            )
+
+            # 3. 응답에서 target_price, stop_loss 추출 → clamp 적용
+            new_target = quant_msg.data.get("target_price") if quant_msg.data else None
+            new_stop = quant_msg.data.get("stop_loss") if quant_msg.data else None
+            score = quant_msg.data.get("score", 5) if quant_msg.data else 5
+
+            new_target = self._clamp_target_price(new_target, current_price)
+            new_stop = self._clamp_stop_loss(new_stop, current_price)
+
+            # 4. 비용 기록
+            cost_manager.record_analysis(symbol, AnalysisDepth.LIGHT)
+
+            # 5. 결과 반환
+            result = {
+                "symbol": symbol,
+                "company_name": company_name,
+                "current_price": current_price,
+                "profit_rate": profit_rate,
+                "new_target_price": new_target,
+                "new_stop_loss": new_stop,
+                "prev_target_price": prev_target_price,
+                "prev_stop_loss": prev_stop_loss,
+                "score": score,
+                "analysis": quant_msg.content[:500],
+                "recommend_sell": score <= 3,
+            }
+
+            logger.info(
+                f"[리밸런싱] {symbol} ({company_name}) "
+                f"score={score}, target={new_target}, stop={new_stop}, "
+                f"recommend_sell={result['recommend_sell']}"
+            )
+
+            return result
+
+        except asyncio.TimeoutError:
+            logger.error(f"[리밸런싱] {symbol} GPT 타임아웃")
+            return None
+        except Exception as e:
+            logger.error(f"[리밸런싱] {symbol} 오류: {e}")
+            return None
 
     async def start_sell_meeting(
         self,
@@ -759,10 +888,10 @@ class CouncilOrchestrator:
         quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5
 
         # 매도 비율 결정 (손실 구간이면 전량, 수익 구간이면 일부)
-        if profit_loss < -5:  # 손절
+        if profit_loss < -settings.stop_loss_percent:  # 손절
             sell_percent = 100
             action = "SELL"
-        elif profit_loss > 20:  # 익절
+        elif profit_loss > settings.take_profit_percent:  # 익절
             sell_percent = 50  # 절반 익절
             action = "PARTIAL_SELL"
         else:
@@ -852,7 +981,7 @@ class CouncilOrchestrator:
             self._pending_signals.append(signal)
 
         await self._notify_signal(signal)
-        await self._persist_signal_to_db(signal)
+        await self._persist_signal_to_db(signal, trigger_source=meeting.trigger_source)
 
         cost_manager.record_analysis(symbol, AnalysisDepth.LIGHT)  # 매도는 가벼운 분석
 
@@ -891,6 +1020,7 @@ class CouncilOrchestrator:
                             f"{signal.suggested_quantity}주 (주문번호: {order_result.order_no})"
                         )
                         await self._notify_signal(signal)
+                        await self._update_signal_status_in_db(signal, executed=True)
                     else:
                         logger.error(f"❌ 대기 큐 주문 실패: {signal.symbol} - {order_result.message}")
                         remaining.append(signal)
@@ -926,6 +1056,96 @@ class CouncilOrchestrator:
     def get_cost_stats(self) -> dict:
         """비용 통계"""
         return cost_manager.get_stats()
+
+    async def restore_pending_signals(self):
+        """서버 재시작 시 DB에서 미체결 시그널 복원"""
+        try:
+            pending_db_signals = await trading_service.get_pending_signals(limit=50)
+
+            restored_queued = 0
+            restored_pending = 0
+
+            for s in pending_db_signals:
+                # 수량이 없으면 복원 불가
+                quantity = s.get("quantity")
+                if not quantity or quantity <= 0:
+                    logger.debug(f"수량 없는 시그널 스킵: {s['symbol']} (id={s['id']})")
+                    continue
+
+                action = s["signal_type"].upper()
+                # HOLD 시그널은 체결 대상이 아님
+                if action == "HOLD":
+                    continue
+
+                confidence = s["strength"] / 100.0
+
+                signal = InvestmentSignal(
+                    id=f"r{s['id']}",  # 복원된 시그널 구분용 prefix
+                    symbol=s["symbol"],
+                    company_name="",
+                    action=action,
+                    suggested_quantity=quantity,
+                    suggested_amount=0,
+                    target_price=int(s["target_price"]) if s.get("target_price") else None,
+                    stop_loss_price=int(s["stop_loss"]) if s.get("stop_loss") else None,
+                    consensus_reason=s.get("reason", ""),
+                    confidence=confidence,
+                )
+                signal._db_id = s["id"]
+
+                # 원래 상태에 따라 복원
+                original_status = s.get("signal_status", "")
+                if original_status == "queued":
+                    signal.status = SignalStatus.QUEUED
+                    self._queued_executions.append(signal)
+                    restored_queued += 1
+                elif original_status == "pending":
+                    signal.status = SignalStatus.PENDING
+                    self._pending_signals.append(signal)
+                    restored_pending += 1
+                else:
+                    # 상태 불분명한 경우 auto_execute 기준으로 결정
+                    if self.auto_execute and confidence >= self.min_confidence:
+                        signal.status = SignalStatus.QUEUED
+                        self._queued_executions.append(signal)
+                        restored_queued += 1
+                    else:
+                        signal.status = SignalStatus.PENDING
+                        self._pending_signals.append(signal)
+                        restored_pending += 1
+
+            if restored_queued or restored_pending:
+                logger.info(
+                    f"✅ 미체결 시그널 복원 완료: "
+                    f"대기큐 {restored_queued}건, 승인대기 {restored_pending}건"
+                )
+            else:
+                logger.info("미체결 시그널 없음 (복원 대상 0건)")
+
+        except Exception as e:
+            logger.error(f"미체결 시그널 복원 실패: {e}")
+
+    async def _update_signal_status_in_db(self, signal: InvestmentSignal, executed: bool = False):
+        """DB 시그널 상태 업데이트"""
+        db_id = getattr(signal, "_db_id", None)
+        if not db_id:
+            return
+        try:
+            from app.core.database import async_session_maker
+            from app.models import TradingSignal as TradingSignalModel
+            from sqlalchemy import select
+
+            async with async_session_maker() as session:
+                result = await session.execute(
+                    select(TradingSignalModel).where(TradingSignalModel.id == db_id)
+                )
+                db_signal = result.scalar_one_or_none()
+                if db_signal:
+                    db_signal.is_executed = executed
+                    db_signal.signal_status = signal.status.value
+                    await session.commit()
+        except Exception as e:
+            logger.error(f"DB 시그널 상태 업데이트 실패 (id={db_id}): {e}")
 
 
 # 싱글톤 인스턴스

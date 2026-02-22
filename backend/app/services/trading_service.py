@@ -283,6 +283,8 @@ class TradingService:
         reason: str,
         target_price: Optional[float] = None,
         stop_loss: Optional[float] = None,
+        quantity: Optional[int] = None,
+        signal_status: Optional[str] = None,
     ) -> int:
         """AI 트레이딩 시그널 생성"""
         async with async_session_maker() as session:
@@ -294,6 +296,8 @@ class TradingService:
                 reason=reason,
                 target_price=Decimal(str(target_price)) if target_price else None,
                 stop_loss=Decimal(str(stop_loss)) if stop_loss else None,
+                quantity=quantity,
+                signal_status=signal_status,
             )
             session.add(signal)
             await session.commit()
@@ -362,6 +366,8 @@ class TradingService:
                     "reason": s.reason,
                     "target_price": float(s.target_price) if s.target_price else None,
                     "stop_loss": float(s.stop_loss) if s.stop_loss else None,
+                    "quantity": s.quantity,
+                    "signal_status": s.signal_status,
                     "created_at": s.created_at.isoformat(),
                 }
                 for s in signals

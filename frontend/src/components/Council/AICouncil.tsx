@@ -7,6 +7,7 @@ import { SignalCard } from './SignalCard';
 import { MeetingViewer } from './MeetingViewer';
 import { ConfigPanel } from './ConfigPanel';
 import { AccountHoldingsPanel } from './AccountHoldingsPanel';
+import { RealizedPnlPanel } from './RealizedPnlPanel';
 
 export default function AICouncil() {
   const queryClient = useQueryClient();
@@ -269,6 +270,9 @@ export default function AICouncil() {
 
       {/* 계좌 보유종목 현황 */}
       <AccountHoldingsPanel />
+
+      {/* 실현 수익 */}
+      <RealizedPnlPanel />
 
       {/* Status Cards */}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-4">

@@ -22,6 +22,7 @@ from app.services.kiwoom.base import (
     OrderResult,
     Balance,
     Holding,
+    RealizedPnlItem,
     OrderType,
     OrderSide,
 )
@@ -747,6 +748,113 @@ class KiwoomRestClient(KiwoomBaseClient):
 
         except Exception as e:
             logger.error(f"보유종목 조회 실패: {str(e)}")
+            return []
+
+    async def get_realized_pnl(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[RealizedPnlItem]:
+        """
+        일자별 종목별 실현손익 조회 (ka10073 - 일자별종목별실현손익요청_기간)
+
+        Args:
+            start_date: 시작일 (YYYYMMDD)
+            end_date: 종료일 (YYYYMMDD)
+
+        Returns:
+            실현손익 항목 리스트
+        """
+        def parse_int(val) -> int:
+            if val is None:
+                return 0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                if cleaned.startswith("-"):
+                    return -int(cleaned[1:])
+                elif cleaned.startswith("+"):
+                    return int(cleaned[1:])
+                return int(cleaned) if cleaned else 0
+            except (ValueError, TypeError):
+                return 0
+
+        def parse_float(val) -> float:
+            if val is None:
+                return 0.0
+            try:
+                cleaned = str(val).strip().replace(",", "")
+                if cleaned.startswith("-"):
+                    return -float(cleaned[1:])
+                elif cleaned.startswith("+"):
+                    return float(cleaned[1:])
+                return float(cleaned) if cleaned else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+
+        if not end_date:
+            end_date = datetime.now().strftime("%Y%m%d")
+        if not start_date:
+            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+
+        try:
+            all_items: List[RealizedPnlItem] = []
+            cont_yn = "N"
+            next_key = ""
+
+            while True:
+                headers = self._get_headers(api_id="ka10073", cont_yn=cont_yn, next_key=next_key)
+
+                async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                    response = await client.post(
+                        f"{self.base_url}/api/dostk/acnt",
+                        headers=headers,
+                        json={
+                            "stk_cd": "",
+                            "strt_dt": start_date,
+                            "end_dt": end_date,
+                        },
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+
+                if result.get("return_code") != 0:
+                    if not all_items:
+                        logger.warning(f"ka10073 조회 실패: {result.get('return_msg')}")
+                    break
+
+                items = result.get("dt_stk_rlzt_pl", [])
+                for item in items:
+                    stk_cd = str(item.get("stk_cd", "")).replace("A", "").strip()
+                    if not stk_cd:
+                        continue
+
+                    all_items.append(RealizedPnlItem(
+                        date=item.get("dt", ""),
+                        symbol=stk_cd,
+                        name=item.get("stk_nm", "").strip(),
+                        quantity=parse_int(item.get("cntr_qty")),
+                        buy_price=parse_int(item.get("buy_uv")),
+                        sell_price=parse_int(item.get("cntr_pric")),
+                        profit_loss=parse_int(item.get("tdy_sel_pl")),
+                        profit_rate=parse_float(item.get("pl_rt")),
+                        commission=parse_int(item.get("tdy_trde_cmsn")),
+                        tax=parse_int(item.get("tdy_trde_tax")),
+                    ))
+
+                # 연속조회 처리
+                resp_cont_yn = result.get("cont_yn", "N")
+                resp_next_key = result.get("next_key", "")
+                if resp_cont_yn == "Y" and resp_next_key:
+                    cont_yn = "Y"
+                    next_key = resp_next_key
+                else:
+                    break
+
+            logger.info(f"ka10073 - 실현손익 {len(all_items)}건 조회 ({start_date}~{end_date})")
+            return all_items
+
+        except Exception as e:
+            logger.error(f"실현손익 조회 실패: {str(e)}")
             return []
 
     async def get_order_history(

@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Tuple
 from dataclasses import dataclass, field
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,16 +53,15 @@ class PortfolioSellCandidate:
 class PortfolioAnalyzer:
     """포트폴리오 분석기"""
 
-    # 기본 설정
-    STOP_LOSS_THRESHOLD = -5.0      # 손절 기준 (-5%)
-    TAKE_PROFIT_THRESHOLD = 20.0    # 익절 기준 (+20%)
-    TRAILING_STOP_RATE = 0.7        # 트레일링 스탑 (고점 대비 30% 하락)
-
     MAX_HOLDING_DAYS = 90           # 최대 보유 기간 (일)
     MAX_PORTFOLIO_WEIGHT = 30.0     # 최대 포트폴리오 비중 (%)
 
     def __init__(self):
         self._highest_prices: Dict[str, int] = {}  # 종목별 최고가 기록
+        # config 값 사용 (통일된 손절/익절 기준)
+        self.stop_loss_threshold = -settings.stop_loss_percent
+        self.take_profit_threshold = settings.take_profit_percent
+        self.trailing_stop_rate = 0.7  # 트레일링 스탑 (고점 대비 30% 하락)
 
     def update_highest_price(self, symbol: str, price: int):
         """최고가 업데이트"""
@@ -71,7 +72,7 @@ class PortfolioAnalyzer:
 
     def check_stop_loss(self, position: PortfolioPosition) -> Optional[SellSignalReason]:
         """손절 조건 체크"""
-        if position.profit_loss_rate <= self.STOP_LOSS_THRESHOLD:
+        if position.profit_loss_rate <= self.stop_loss_threshold:
             return SellSignalReason(
                 reason_type="stop_loss",
                 description=f"손절선 도달 (수익률: {position.profit_loss_rate:.1f}%)",
@@ -82,7 +83,7 @@ class PortfolioAnalyzer:
 
     def check_take_profit(self, position: PortfolioPosition) -> Optional[SellSignalReason]:
         """익절 조건 체크"""
-        if position.profit_loss_rate >= self.TAKE_PROFIT_THRESHOLD:
+        if position.profit_loss_rate >= self.take_profit_threshold:
             return SellSignalReason(
                 reason_type="take_profit",
                 description=f"익절 목표 도달 (수익률: {position.profit_loss_rate:.1f}%)",
@@ -98,7 +99,7 @@ class PortfolioAnalyzer:
         if highest > position.avg_price:  # 수익 구간에서만
             drop_from_high = (highest - position.current_price) / highest * 100
 
-            if drop_from_high >= (1 - self.TRAILING_STOP_RATE) * 100:
+            if drop_from_high >= (1 - self.trailing_stop_rate) * 100:
                 return SellSignalReason(
                     reason_type="trailing_stop",
                     description=f"고점 대비 {drop_from_high:.1f}% 하락 (고점: {highest:,}원)",

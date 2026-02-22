@@ -87,6 +87,10 @@ export const councilApi = {
     const response = await api.get('/council/account/summary');
     return response.data;
   },
+  getRealizedPnl: async (period: string = '1m') => {
+    const response = await api.get('/council/account/realized-pnl', { params: { period } });
+    return response.data;
+  },
   getAccountBalance: async () => {
     const summary = await councilApi.getAccountSummary();
     return summary.balance;
