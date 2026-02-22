@@ -24,6 +24,7 @@ from .technical_indicators import technical_calculator, TechnicalAnalysisResult
 from app.services.dart_client import dart_client, FinancialData
 from .trading_hours import trading_hours, MarketSession, get_kst_now
 from .cost_manager import cost_manager, AnalysisDepth
+from app.services.trading_service import trading_service
 
 logger = logging.getLogger(__name__)
 
@@ -490,6 +491,7 @@ class CouncilOrchestrator:
 
         # 콜백 알림
         await self._notify_signal(signal)
+        await self._persist_signal_to_db(signal)
 
         logger.info(f"AI 회의 완료: {company_name} - {signal.action} {signal.allocation_percent}%")
 
@@ -660,6 +662,22 @@ class CouncilOrchestrator:
         # HOLD
         logger.info(f"HOLD 결정: 조건 미충족 (비율: {final_percent}%, 평균: {avg_score:.1f})")
         return "HOLD"
+
+    async def _persist_signal_to_db(self, signal: InvestmentSignal):
+        """Council 시그널을 DB에 저장"""
+        try:
+            db_id = await trading_service.create_trading_signal(
+                symbol=signal.symbol,
+                signal_type=signal.action.lower(),
+                strength=signal.confidence * 100,
+                source_agent="council",
+                reason=signal.consensus_reason[:1000],
+                target_price=float(signal.target_price) if signal.target_price else None,
+                stop_loss=float(signal.stop_loss_price) if signal.stop_loss_price else None,
+            )
+            logger.info(f"Council signal → DB: {signal.symbol} {signal.action} (id={db_id})")
+        except Exception as e:
+            logger.error(f"Council signal DB 저장 실패: {signal.symbol} - {e}")
 
     async def start_sell_meeting(
         self,
@@ -834,6 +852,7 @@ class CouncilOrchestrator:
             self._pending_signals.append(signal)
 
         await self._notify_signal(signal)
+        await self._persist_signal_to_db(signal)
 
         cost_manager.record_analysis(symbol, AnalysisDepth.LIGHT)  # 매도는 가벼운 분석
 

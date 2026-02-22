@@ -91,6 +91,13 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # Council 대기큐 처리 - 2분마다 (장 시작 후 자동 체결)
+    "process-council-queue": {
+        "task": "app.services.tasks.process_council_queue",
+        "schedule": 120.0,  # Every 2 minutes
+        "options": {"queue": "high_priority"},
+    },
+
     # 종목 유니버스 갱신 - 매일 08:50 (장 시작 전)
     "refresh-stock-universe": {
         "task": "app.services.tasks.refresh_stock_universe",
@@ -104,6 +111,7 @@ celery_app.conf.task_routes = {
     "app.services.tasks.collect_stock_prices": {"queue": "high_priority"},
     "app.services.tasks.monitor_signals": {"queue": "high_priority"},
     "app.services.tasks.auto_execute_signal": {"queue": "high_priority"},
+    "app.services.tasks.process_council_queue": {"queue": "high_priority"},
     "app.services.tasks.send_notification": {"queue": "high_priority"},
     "app.services.tasks.run_ai_analysis": {"queue": "default"},
     "app.services.tasks.run_single_analysis": {"queue": "default"},

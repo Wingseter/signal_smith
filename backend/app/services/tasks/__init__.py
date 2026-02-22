@@ -16,6 +16,7 @@ from .signal_tasks import (  # noqa: F401
     auto_execute_signal,
     scan_signals,
     monitor_holdings_sell,
+    process_council_queue,
     refresh_stock_universe,
 )
 from .notification_tasks import send_notification, send_daily_report  # noqa: F401

@@ -187,12 +187,14 @@ def scan_signals(self):
         results = run_async(signal_scanner.scan_watchlist(symbols, max_concurrent=5))
 
         sell_triggered = run_async(_check_sell_signals_against_holdings(results))
+        buy_triggered = run_async(_check_buy_signals_for_council(results))
 
         return {
             "status": "success",
             "scanned": len(symbols),
             "results": len(results),
             "sell_triggered": sell_triggered,
+            "buy_triggered": buy_triggered,
             "top_signals": [
                 {
                     "symbol": r.symbol,
@@ -273,6 +275,36 @@ def monitor_holdings_sell(self):
 
     except Exception as e:
         logger.error(f"Holdings sell monitor failed: {e}")
+        self.retry(exc=e)
+
+
+@celery_app.task(
+    name="app.services.tasks.process_council_queue",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+)
+def process_council_queue(self):
+    """Process queued council executions when market opens."""
+    if not is_market_hours():
+        return {"status": "skipped", "reason": "market_closed"}
+
+    try:
+        from app.services.council.orchestrator import council_orchestrator
+
+        queued = council_orchestrator.get_queued_executions()
+        if not queued:
+            return {"status": "success", "message": "no_queued_signals"}
+
+        executed = run_async(council_orchestrator.process_queued_executions())
+
+        return {
+            "status": "success",
+            "queued_before": len(queued),
+            "executed": len(executed),
+        }
+    except Exception as e:
+        logger.error(f"Council queue processing failed: {e}")
         self.retry(exc=e)
 
 
@@ -530,6 +562,68 @@ async def _check_sell_signals_against_holdings(results) -> int:
 
     except Exception as e:
         logger.error(f"Sell signals cross-check failed: {e}")
+        return 0
+
+
+async def _check_buy_signals_for_council(results) -> int:
+    """Check quant BUY signals and trigger council meetings for top candidates."""
+    from app.services.council.orchestrator import council_orchestrator
+    from app.services.signals.models import SignalAction
+    from app.core.redis import get_redis
+
+    try:
+        buy_results = [
+            r for r in results
+            if r.action in (SignalAction.STRONG_BUY, SignalAction.BUY)
+            and r.composite_score >= 75
+        ][:3]  # 스캔당 최대 3건
+
+        if not buy_results:
+            return 0
+
+        holdings = await _get_cached_holdings()
+        held_symbols = {h.symbol for h in holdings} if holdings else set()
+        redis = await get_redis()
+        triggered = 0
+
+        for result in buy_results:
+            if result.symbol in held_symbols:
+                continue
+
+            cooldown_key = f"quant_buy_council:cooldown:{result.symbol}"
+            if await redis.exists(cooldown_key):
+                continue
+
+            company_name = result.symbol
+            try:
+                with get_sync_db() as db:
+                    stock = db.execute(
+                        select(Stock).where(Stock.symbol == result.symbol)
+                    ).scalar_one_or_none()
+                    if stock:
+                        company_name = stock.name
+            except Exception:
+                pass
+
+            await redis.setex(cooldown_key, 3600, "1")  # 60분 쿨다운
+
+            await council_orchestrator.start_meeting(
+                symbol=result.symbol,
+                company_name=company_name,
+                news_title=(
+                    f"퀀트 매수 신호: {result.action.value} "
+                    f"(점수: {result.composite_score}/100, 매수 {result.bullish_count}개)"
+                ),
+                news_score=8 if result.action == SignalAction.STRONG_BUY else 7,
+                available_amount=500000,
+                current_price=result.indicators.current_price if result.indicators else 0,
+            )
+            triggered += 1
+            logger.info(f"Quant BUY → council: {result.symbol}, score={result.composite_score}")
+
+        return triggered
+    except Exception as e:
+        logger.error(f"Buy signals council check failed: {e}")
         return 0
 
 
