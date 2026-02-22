@@ -21,7 +21,7 @@ from .models import (
 from .quant_analyst import quant_analyst
 from .fundamental_analyst import fundamental_analyst
 from .technical_indicators import technical_calculator, TechnicalAnalysisResult
-from .dart_client import dart_client, FinancialData
+from app.services.dart_client import dart_client, FinancialData
 from .trading_hours import trading_hours, MarketSession, get_kst_now
 from .cost_manager import cost_manager, AnalysisDepth
 
@@ -193,84 +193,159 @@ class CouncilOrchestrator:
         meeting.current_round = 1
 
         # GPT 퀀트 분석 (실제 차트 데이터 전달)
-        quant_msg = await quant_analyst.analyze(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            technical_data=technical_data,  # 실제 차트 데이터 전달
-        )
-        meeting.add_message(quant_msg)
-        await self._notify_meeting_update(meeting)
+        try:
+            quant_msg = await asyncio.wait_for(
+                quant_analyst.analyze(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    technical_data=technical_data,  # 실제 차트 데이터 전달
+                ),
+                timeout=15.0  # 타임아웃 15초 강제
+            )
+            meeting.add_message(quant_msg)
+            await self._notify_meeting_update(meeting)
 
-        quant_percent = quant_msg.data.get("suggested_percent", 0) if quant_msg.data else 0
-        quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5
+            quant_percent = quant_msg.data.get("suggested_percent", 0) if quant_msg.data else 0
+            quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"퀀트 분석가 API 호출 실패 또는 타임아웃: {e}")
+            # Fallback 로직: 기본값 할당 및 에러 메시지 생성
+            quant_msg = CouncilMessage(
+                role=AnalystRole.QUANT,
+                speaker="시스템",
+                content="[시스템 경고] 퀀트 분석가 API 응답 지연으로 기본 판단을 적용합니다. 차트 및 기술적 지표 단독 결정에 유의하세요.",
+                data={"suggested_percent": 0, "score": 5}
+            )
+            meeting.add_message(quant_msg)
+            await self._notify_meeting_update(meeting)
+            quant_percent = 0
+            quant_score = 5
 
         # Claude 펀더멘털 분석 (DART 실제 재무제표 전달)
-        fundamental_msg = await fundamental_analyst.analyze(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            financial_data=financial_data,  # DART 재무제표 데이터 전달
-        )
-        meeting.add_message(fundamental_msg)
-        await self._notify_meeting_update(meeting)
+        try:
+            fundamental_msg = await asyncio.wait_for(
+                fundamental_analyst.analyze(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    financial_data=financial_data,  # DART 재무제표 데이터 전달
+                ),
+                timeout=15.0  # 타임아웃 15초 강제
+            )
+            meeting.add_message(fundamental_msg)
+            await self._notify_meeting_update(meeting)
 
-        fundamental_percent = fundamental_msg.data.get("suggested_percent", 0) if fundamental_msg.data else 0
-        fundamental_score = fundamental_msg.data.get("score", 5) if fundamental_msg.data else 5
+            fundamental_percent = fundamental_msg.data.get("suggested_percent", 0) if fundamental_msg.data else 0
+            fundamental_score = fundamental_msg.data.get("score", 5) if fundamental_msg.data else 5
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"기본적 분석가 API 호출 실패 또는 타임아웃: {e}")
+            # Fallback 로직: 기본값 할당 및 에러 메시지 생성
+            fundamental_msg = CouncilMessage(
+                role=AnalystRole.FUNDAMENTAL,
+                speaker="시스템",
+                content="[시스템 경고] 기본적 분석가 API 응답 지연으로 기본 판단을 적용합니다. 재무 데이터 단독 결정에 유의하세요.",
+                data={"suggested_percent": 0, "score": 5}
+            )
+            meeting.add_message(fundamental_msg)
+            await self._notify_meeting_update(meeting)
+            fundamental_percent = 0
+            fundamental_score = 5
 
         # 3. 라운드 2: 상호 검토 및 조정
         meeting.current_round = 2
 
         # GPT가 Claude 의견에 응답 (차트 데이터 유지)
-        quant_response = await quant_analyst.respond_to(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            other_analysis=fundamental_msg.content,
-            technical_data=technical_data,  # 실제 차트 데이터 전달
-        )
-        meeting.add_message(quant_response)
-        await self._notify_meeting_update(meeting)
+        try:
+            quant_response = await asyncio.wait_for(
+                quant_analyst.respond_to(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    other_analysis=fundamental_msg.content,
+                    technical_data=technical_data,  # 실제 차트 데이터 전달
+                ),
+                timeout=15.0  # 타임아웃 강제
+            )
+            meeting.add_message(quant_response)
+            await self._notify_meeting_update(meeting)
 
-        # 업데이트된 퀀트 제안
-        if quant_response.data and "suggested_percent" in quant_response.data:
-            quant_percent = quant_response.data["suggested_percent"]
+            # 업데이트된 퀀트 제안
+            if quant_response.data and "suggested_percent" in quant_response.data:
+                quant_percent = quant_response.data["suggested_percent"]
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"퀀트 응답 API 호출 실패 또는 타임아웃: {e}")
+            quant_response = CouncilMessage(
+                role=AnalystRole.QUANT,
+                speaker="시스템",
+                content="[시스템 경고] 퀀트 분석가 상호 검토 응답 지연으로 기존 의견을 유지합니다.",
+                data={"suggested_percent": quant_percent, "score": quant_score}
+            )
+            meeting.add_message(quant_response)
 
         # Claude가 GPT 응답에 응답
-        fundamental_response = await fundamental_analyst.respond_to(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            other_analysis=quant_response.content,
-        )
-        meeting.add_message(fundamental_response)
-        await self._notify_meeting_update(meeting)
+        try:
+            fundamental_response = await asyncio.wait_for(
+                fundamental_analyst.respond_to(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    other_analysis=quant_response.content,
+                ),
+                timeout=15.0  # 타임아웃 강제
+            )
+            meeting.add_message(fundamental_response)
+            await self._notify_meeting_update(meeting)
 
-        # 업데이트된 펀더멘털 제안
-        if fundamental_response.data and "suggested_percent" in fundamental_response.data:
-            fundamental_percent = fundamental_response.data["suggested_percent"]
+            # 업데이트된 펀더멘털 제안
+            if fundamental_response.data and "suggested_percent" in fundamental_response.data:
+                fundamental_percent = fundamental_response.data["suggested_percent"]
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"기본적 응답 API 호출 실패 또는 타임아웃: {e}")
+            fundamental_response = CouncilMessage(
+                role=AnalystRole.FUNDAMENTAL,
+                speaker="시스템",
+                content="[시스템 경고] 기본적 분석가 상호 검토 응답 지연으로 기존 의견을 유지합니다.",
+                data={"suggested_percent": fundamental_percent, "score": fundamental_score}
+            )
+            meeting.add_message(fundamental_response)
 
         # 4. 라운드 3: 합의 도출
         meeting.current_round = 3
 
         # 최종 합의안
-        consensus_msg = await fundamental_analyst.propose_consensus(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=news_title,
-            previous_messages=meeting.messages,
-            quant_percent=quant_percent,
-            fundamental_percent=fundamental_percent,
-        )
-        meeting.add_message(consensus_msg)
-        await self._notify_meeting_update(meeting)
+        try:
+            consensus_msg = await asyncio.wait_for(
+                fundamental_analyst.propose_consensus(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=news_title,
+                    previous_messages=meeting.messages,
+                    quant_percent=quant_percent,
+                    fundamental_percent=fundamental_percent,
+                ),
+                timeout=15.0  # 타임아웃 강제
+            )
+            meeting.add_message(consensus_msg)
+            await self._notify_meeting_update(meeting)
 
-        # 최종 투자 비율 결정
-        final_percent = consensus_msg.data.get("suggested_percent", 0) if consensus_msg.data else 0
+            # 최종 투자 비율 결정
+            final_percent = consensus_msg.data.get("suggested_percent", 0) if consensus_msg.data else 0
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"최종 합의 도출 API 호출 실패 또는 타임아웃: {e}")
+            final_percent = (quant_percent + fundamental_percent) / 2
+            consensus_msg = CouncilMessage(
+                role=AnalystRole.FUNDAMENTAL,
+                speaker="시스템",
+                content="[시스템 경고] 의견 통합 과정 지연으로 양측 분석가 의견의 산술 평균을 최종 비율로 적용합니다.",
+                data={"suggested_percent": final_percent}
+            )
+            meeting.add_message(consensus_msg)
+
         if final_percent == 0:
             final_percent = (quant_percent + fundamental_percent) / 2
 
@@ -637,16 +712,30 @@ class CouncilOrchestrator:
 
         # 2. GPT 퀀트 매도 분석
         meeting.current_round = 1
-        quant_msg = await quant_analyst.analyze(
-            symbol=symbol,
-            company_name=company_name,
-            news_title=f"매도 검토: {sell_reason}",
-            previous_messages=meeting.messages,
-            technical_data=technical_data,
-            request=f"현재 보유 중인 종목의 매도 타이밍을 분석해주세요. 수익률 {profit_loss:+.1f}%, 사유: {sell_reason}",
-        )
-        meeting.add_message(quant_msg)
-        await self._notify_meeting_update(meeting)
+        try:
+            quant_msg = await asyncio.wait_for(
+                quant_analyst.analyze(
+                    symbol=symbol,
+                    company_name=company_name,
+                    news_title=f"매도 검토: {sell_reason}",
+                    previous_messages=meeting.messages,
+                    technical_data=technical_data,
+                    request=f"현재 보유 중인 종목의 매도 타이밍을 분석해주세요. 수익률 {profit_loss:+.1f}%, 사유: {sell_reason}",
+                ),
+                timeout=15.0  # 타임아웃 강제
+            )
+            meeting.add_message(quant_msg)
+            await self._notify_meeting_update(meeting)
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.error(f"매도 검토 중 퀀트 분석가 API 호출 실패 또는 타임아웃: {e}")
+            quant_msg = CouncilMessage(
+                role=AnalystRole.QUANT,
+                speaker="시스템",
+                content=f"[시스템 경고] 분석 지연 발생. 수익률 {profit_loss:+.1f}% 기반 기계적 매도를 우선 고려합니다.",
+                data={"suggested_percent": 30 if profit_loss >= 0 else 100, "score": 5}
+            )
+            meeting.add_message(quant_msg)
+            await self._notify_meeting_update(meeting)
 
         # 3. SELL 시그널 생성
         quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5

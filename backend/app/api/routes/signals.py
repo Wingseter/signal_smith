@@ -12,6 +12,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Qu
 from pydantic import BaseModel
 
 from app.services.signals import signal_scanner, SignalResult
+from app.core.websocket import BaseConnectionManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Quant Signals"])
@@ -24,38 +25,7 @@ class ScanRequest(BaseModel):
     symbols: List[str]
 
 
-# ============ WebSocket Manager ============
-
-class SignalConnectionManager:
-    """시그널 WebSocket 연결 관리"""
-
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"시그널 WebSocket 연결: {len(self.active_connections)}개 활성")
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        logger.info(f"시그널 WebSocket 해제: {len(self.active_connections)}개 활성")
-
-    async def broadcast(self, message: dict):
-        """모든 연결에 메시지 브로드캐스트"""
-        disconnected = []
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception as e:
-                logger.error(f"브로드캐스트 오류: {e}")
-                disconnected.append(connection)
-        for conn in disconnected:
-            self.disconnect(conn)
-
-
-signal_manager = SignalConnectionManager()
+signal_manager = BaseConnectionManager("signals")
 
 
 # ============ 콜백 등록 ============

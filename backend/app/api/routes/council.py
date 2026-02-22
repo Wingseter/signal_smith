@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from app.services.news import news_trader, news_monitor
 from app.services.council import council_orchestrator, CouncilMeeting, InvestmentSignal
 from app.services.trading_service import trading_service
+from app.core.websocket import BaseConnectionManager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["AI Council"])
@@ -44,40 +45,7 @@ class ManualMeetingRequest(BaseModel):
     news_score: int = 8
 
 
-# ============ WebSocket Manager ============
-
-class ConnectionManager:
-    """WebSocket 연결 관리"""
-
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"WebSocket 연결: {len(self.active_connections)}개 활성")
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        logger.info(f"WebSocket 해제: {len(self.active_connections)}개 활성")
-
-    async def broadcast(self, message: dict):
-        """모든 연결에 메시지 브로드캐스트"""
-        disconnected = []
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception as e:
-                logger.error(f"브로드캐스트 오류: {e}")
-                disconnected.append(connection)
-
-        # 끊어진 연결 제거
-        for conn in disconnected:
-            self.disconnect(conn)
-
-
-manager = ConnectionManager()
+manager = BaseConnectionManager("council")
 
 
 # ============ 회의 콜백 등록 ============

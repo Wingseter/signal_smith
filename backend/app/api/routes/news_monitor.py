@@ -204,37 +204,9 @@ setup_tracking()
 
 # ============ WebSocket Manager ============
 
-class MonitorConnectionManager:
-    """WebSocket 연결 관리"""
+from app.core.websocket import BaseConnectionManager
 
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"News Monitor WebSocket 연결: {len(self.active_connections)}개 활성")
-
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        logger.info(f"News Monitor WebSocket 해제: {len(self.active_connections)}개 활성")
-
-    async def broadcast(self, message: dict):
-        """모든 연결에 메시지 브로드캐스트"""
-        disconnected = []
-        for connection in self.active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception as e:
-                logger.error(f"브로드캐스트 오류: {e}")
-                disconnected.append(connection)
-
-        for conn in disconnected:
-            self.disconnect(conn)
-
-
-ws_manager = MonitorConnectionManager()
+ws_manager = BaseConnectionManager("news-monitor")
 
 
 # 콜백 등록 (WebSocket 브로드캐스트용)

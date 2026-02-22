@@ -18,7 +18,7 @@ import anthropic
 
 from app.config import settings
 from .models import CouncilMessage, AnalystRole
-from .dart_client import FinancialData
+from app.services.dart_client import FinancialData
 
 logger = logging.getLogger(__name__)
 

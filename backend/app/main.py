@@ -1,21 +1,33 @@
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-from app.api.routes import auth, stocks, portfolio, trading, analysis, notifications, backtest, performance, optimizer, sectors, reports, council, news_monitor, signals
+from app.api.routes import (
+    auth, stocks, portfolio, trading, analysis, notifications,
+    backtest, performance, optimizer, sectors, reports, council,
+    news_monitor, signals,
+)
 from app.api.websocket.handler import router as ws_router
 from app.config import settings
 from app.core.database import init_db
+from app.core.exceptions import SignalSmithError
+from app.core.logging_config import configure_logging
+
+configure_logging(
+    json_output=settings.is_production,
+    level="INFO" if settings.is_production else "DEBUG",
+)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle manager."""
-    # Startup
     await init_db()
     yield
-    # Shutdown
 
 
 app = FastAPI(
@@ -26,16 +38,40 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS Middleware
+
+# ── Global exception handlers ──
+
+
+@app.exception_handler(SignalSmithError)
+async def signal_smith_error_handler(request: Request, exc: SignalSmithError):
+    logger.error("SignalSmithError [%s]: %s", exc.code, exc.message, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": exc.code, "detail": exc.message},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled error on %s %s", request.method, request.url.path, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "INTERNAL_ERROR", "detail": "An unexpected error occurred."},
+    )
+
+
+# ── CORS Middleware ──
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
-# Include routers
+# ── Routers ──
+
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(stocks.router, prefix="/api/v1/stocks", tags=["Stocks"])
 app.include_router(portfolio.router, prefix="/api/v1/portfolio", tags=["Portfolio"])

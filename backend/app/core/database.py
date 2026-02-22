@@ -49,9 +49,15 @@ sync_session_maker = sessionmaker(
 
 
 async def init_db() -> None:
-    """Initialize database tables."""
+    """Verify database connectivity.
+
+    Schema migrations are managed by Alembic (``alembic upgrade head``).
+    This function only checks the connection is usable at startup.
+    """
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            __import__("sqlalchemy").text("SELECT 1")
+        )
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

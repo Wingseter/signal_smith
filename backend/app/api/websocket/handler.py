@@ -9,12 +9,15 @@ WebSocket Handler
 
 import asyncio
 import json
+import logging
 from typing import Dict, Set, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.redis import get_redis
 from app.services.stock_service import stock_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -43,24 +46,32 @@ class ConnectionManager:
         try:
             await websocket.send_json(message)
         except Exception:
-            pass
+            logger.debug("Failed to send personal message, client may have disconnected")
 
     async def broadcast(self, message: dict, channel: str = "default"):
         if channel in self.active_connections:
+            disconnected = []
             for connection in self.active_connections[channel]:
                 try:
                     await connection.send_json(message)
                 except Exception:
-                    pass
+                    logger.debug("Broadcast send failed, marking connection for cleanup")
+                    disconnected.append(connection)
+            for conn in disconnected:
+                self.disconnect(conn, channel)
 
     async def broadcast_to_symbol_subscribers(self, symbol: str, message: dict):
         """특정 종목 구독자에게만 브로드캐스트"""
+        disconnected = []
         for websocket, symbols in self.symbol_subscriptions.items():
             if symbol in symbols:
                 try:
                     await websocket.send_json(message)
                 except Exception:
-                    pass
+                    logger.debug("Symbol broadcast failed for %s", symbol)
+                    disconnected.append(websocket)
+        for conn in disconnected:
+            self.disconnect(conn)
 
     def subscribe_symbol(self, websocket: WebSocket, symbol: str):
         if websocket in self.symbol_subscriptions:
@@ -201,7 +212,7 @@ async def websocket_analysis(websocket: WebSocket):
                         websocket,
                     )
                 except Exception:
-                    pass
+                    logger.debug("Analysis pubsub message parse error")
 
     listen_task = asyncio.create_task(listen_redis())
 
@@ -255,7 +266,7 @@ async def websocket_trading(websocket: WebSocket):
                         websocket,
                     )
                 except Exception:
-                    pass
+                    logger.debug("Trading pubsub message parse error")
 
     listen_task = asyncio.create_task(listen_redis())
 

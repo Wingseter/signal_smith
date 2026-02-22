@@ -63,20 +63,16 @@ services:
       - ./backend:/app
     command: celery -A app.core.celery_app beat --loglevel=info -s /tmp/celerybeat-schedule
 
-  # React Frontend
+  # React Frontend (production: nginx serving built assets)
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-https://emolgalab.duckdns.org}
+        VITE_WS_URL: ${VITE_WS_URL:-wss://emolgalab.duckdns.org}
     container_name: signal_smith_frontend
     network_mode: host
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    environment:
-      - VITE_API_URL=https://emolgalab.duckdns.org
-      - VITE_WS_URL=wss://emolgalab.duckdns.org
-    command: npm run dev -- --host
 
 volumes:
   redis_data:

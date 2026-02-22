@@ -9,6 +9,11 @@ celery_app = Celery(
     backend=settings.redis_url,
     include=[
         "app.services.tasks",
+        "app.services.tasks.price_tasks",
+        "app.services.tasks.analysis_tasks",
+        "app.services.tasks.signal_tasks",
+        "app.services.tasks.notification_tasks",
+        "app.services.tasks.maintenance_tasks",
     ],
 )
 

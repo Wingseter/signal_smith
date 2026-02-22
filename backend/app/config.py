@@ -1,6 +1,7 @@
 from functools import lru_cache
-from typing import Optional
+from typing import List, Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +17,12 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = True
     secret_key: str = "change-me-in-production"
+
+    # CORS
+    cors_origins: List[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
 
     # Database (MySQL HeatWave)
     database_url: str = "mysql+aiomysql://admin:password@localhost:3306/signal_smith"
@@ -73,6 +80,20 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @model_validator(mode="after")
+    def _validate_production(self) -> "Settings":
+        """Reject insecure defaults when running in production."""
+        if not self.is_production:
+            return self
+        if self.secret_key == "change-me-in-production":
+            raise ValueError(
+                "SECRET_KEY must be set to a secure random value in production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+            )
+        if self.debug:
+            raise ValueError("DEBUG must be False in production.")
+        return self
 
 
 @lru_cache

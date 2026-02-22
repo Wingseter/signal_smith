@@ -48,8 +48,8 @@ class TradingService:
             symbol: 종목 코드
             side: 'buy' 또는 'sell'
             quantity: 수량
-            price: 가격 (시장가 주문시 0)
-            order_type: 'limit', 'market' 등
+            price: 가격 (0일 경우 현재가 조회 후 지정가 주문으로 자동 변환)
+            order_type: 'limit', 'market' 등 (가격이 0이면 강제로 limit 최적화 실행)
 
         Returns:
             주문 결과
@@ -60,6 +60,22 @@ class TradingService:
                 "error": "Trading is disabled",
                 "message": "자동 매매가 비활성화되어 있습니다.",
             }
+
+        # 가격이 0이거나 시장가 주문인 경우 현재가를 조회하여 지정가로 최적화
+        if price == 0 or order_type == "market":
+            stock_info = await self.kiwoom.get_stock_price(symbol)
+            if not stock_info or stock_info.current_price == 0:
+                return {
+                    "success": False,
+                    "error": "Price fetch failed",
+                    "message": "현재가를 조회하지 못해 주문을 진행할 수 없습니다.",
+                }
+            # 슬리피지를 방지하기 위해 현재가로 지정가 매매 수행
+            price = stock_info.current_price
+            order_type = "limit"
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"[{symbol}] 시장가 대안으로 현재가({price:,}원) 지정가 주문 전환 ('{side}')")
 
         # 포지션 크기 검증
         if side == "buy":
