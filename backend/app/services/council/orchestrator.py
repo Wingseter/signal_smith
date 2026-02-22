@@ -298,6 +298,18 @@ class CouncilOrchestrator:
             news_score=news_score,
         )
 
+        # SELL 시그널인 경우 보유 여부 확인 — 보유하지 않은 종목은 HOLD로 변경
+        if action == "SELL":
+            try:
+                holdings = await kiwoom_client.get_holdings()
+                held_symbols = [h.symbol for h in holdings]
+                if symbol not in held_symbols:
+                    logger.info(f"SELL → HOLD 변경: {symbol} 미보유 종목")
+                    action = "HOLD"
+            except Exception as e:
+                logger.warning(f"보유 확인 실패, SELL → HOLD: {symbol} - {e}")
+                action = "HOLD"
+
         signal = InvestmentSignal(
             symbol=symbol,
             company_name=company_name,

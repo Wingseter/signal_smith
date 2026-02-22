@@ -620,10 +620,14 @@ def scan_signals(self):
 
         results = run_async(signal_scanner.scan_watchlist(symbols, max_concurrent=5))
 
+        # ── 보유 종목 매도 시그널 교차 검증 ──
+        sell_triggered = run_async(_check_sell_signals_against_holdings(results))
+
         return {
             "status": "success",
             "scanned": len(symbols),
             "results": len(results),
+            "sell_triggered": sell_triggered,
             "top_signals": [
                 {
                     "symbol": r.symbol,
@@ -794,6 +798,249 @@ async def _refresh_universe_async() -> dict:
         "upserted": upserted,
         "universe_size": len(top_symbols),
     }
+
+
+# ============================================================
+# 보유 종목 매도 모니터링 태스크
+# ============================================================
+
+@celery_app.task(
+    name="app.services.tasks.monitor_holdings_sell",
+    bind=True,
+    time_limit=300,
+    soft_time_limit=270,
+)
+def monitor_holdings_sell(self):
+    """
+    보유 종목 매도 감시 (가격 기반 트리거).
+    5분마다 실행. 손절/익절/기술적 악화 감지 → 매도 회의 소집.
+    퀀트 스캔(scan_signals)과 쿨다운 키를 공유하여 중복 방지.
+    """
+    if not is_market_hours():
+        logger.info("Market is closed. Skipping holdings sell monitor.")
+        return {"status": "skipped", "reason": "market_closed"}
+
+    try:
+        holdings = run_async(_get_cached_holdings())
+
+        if not holdings:
+            logger.info("No holdings to monitor for sell.")
+            return {"status": "skipped", "reason": "no_holdings"}
+
+        logger.info(f"Monitoring {len(holdings)} holdings for sell triggers")
+
+        triggered = []
+        for holding in holdings:
+            # 쿨다운 확인 (scan_signals과 공유)
+            if run_async(_check_sell_cooldown(holding.symbol)):
+                continue
+
+            result = run_async(_evaluate_price_triggers(holding))
+            if result:
+                trigger_type, sell_reason = result
+                run_async(_set_sell_cooldown(holding.symbol, ttl=1800))
+
+                from app.services.council.orchestrator import council_orchestrator
+                meeting = run_async(council_orchestrator.start_sell_meeting(
+                    symbol=holding.symbol,
+                    company_name=holding.name,
+                    sell_reason=sell_reason,
+                    current_holdings=holding.quantity,
+                    avg_buy_price=holding.avg_price,
+                    current_price=holding.current_price,
+                ))
+
+                triggered.append({
+                    "symbol": holding.symbol,
+                    "name": holding.name,
+                    "trigger_type": trigger_type,
+                    "reason": sell_reason,
+                    "meeting_id": meeting.id if meeting else None,
+                })
+                logger.info(
+                    f"Sell trigger fired: {holding.symbol} ({holding.name}) "
+                    f"- {trigger_type}: {sell_reason}"
+                )
+
+        return {
+            "status": "success",
+            "monitored": len(holdings),
+            "triggered": len(triggered),
+            "details": triggered,
+        }
+
+    except Exception as e:
+        logger.error(f"Holdings sell monitor failed: {e}")
+        self.retry(exc=e)
+
+
+# ============================================================
+# 매도 모니터링 헬퍼 함수
+# ============================================================
+
+async def _get_cached_holdings():
+    """키움 보유종목 조회 (Redis 1분 캐시)."""
+    import json
+    from app.core.redis import get_redis
+    from app.services.kiwoom.rest_client import kiwoom_client
+
+    redis = await get_redis()
+    cache_key = "sell_monitor:holdings"
+
+    # 캐시 확인
+    cached = await redis.get(cache_key)
+    if cached:
+        # 캐시된 데이터를 Holding 객체로 복원
+        from app.services.kiwoom.base import Holding
+        data_list = json.loads(cached)
+        return [Holding(**d) for d in data_list]
+
+    # 키움 API 조회
+    if not await kiwoom_client.is_connected():
+        try:
+            await kiwoom_client.connect()
+        except Exception as e:
+            logger.warning(f"키움 API 연결 실패 (holdings): {e}")
+            return []
+
+    holdings = await kiwoom_client.get_holdings()
+
+    if holdings:
+        # Redis 캐시 (1분 TTL)
+        data_list = [
+            {
+                "symbol": h.symbol,
+                "name": h.name,
+                "quantity": h.quantity,
+                "avg_price": h.avg_price,
+                "current_price": h.current_price,
+                "evaluation": h.evaluation,
+                "profit_loss": h.profit_loss,
+                "profit_rate": h.profit_rate,
+            }
+            for h in holdings
+        ]
+        await redis.setex(cache_key, 60, json.dumps(data_list))
+
+    return holdings
+
+
+async def _check_sell_cooldown(symbol: str) -> bool:
+    """매도 쿨다운 확인. True면 쿨다운 중 (스킵해야 함)."""
+    from app.core.redis import get_redis
+    redis = await get_redis()
+    return await redis.exists(f"sell_monitor:cooldown:{symbol}") > 0
+
+
+async def _set_sell_cooldown(symbol: str, ttl: int = 1800):
+    """매도 쿨다운 설정 (기본 30분)."""
+    from app.core.redis import get_redis
+    redis = await get_redis()
+    await redis.setex(f"sell_monitor:cooldown:{symbol}", ttl, "1")
+
+
+async def _check_sell_signals_against_holdings(results) -> int:
+    """
+    퀀트 스캔 결과와 보유 종목 교차 검증.
+    SELL/STRONG_SELL 시그널이 보유 종목에 해당하면 매도 회의 소집.
+    Returns: 매도 회의 소집 건수.
+    """
+    from app.services.kiwoom.rest_client import kiwoom_client
+    from app.services.council.orchestrator import council_orchestrator
+
+    try:
+        # 보유 종목 조회 (캐시 활용)
+        holdings = await _get_cached_holdings()
+        if not holdings:
+            return 0
+
+        held_map = {h.symbol: h for h in holdings}
+
+        # SELL/STRONG_SELL 필터
+        from app.services.signals.models import SignalAction
+        sell_results = [
+            r for r in results
+            if r.action in (SignalAction.SELL, SignalAction.STRONG_SELL)
+        ]
+
+        triggered = 0
+        for result in sell_results:
+            if result.symbol not in held_map:
+                continue
+
+            # 쿨다운 확인
+            if await _check_sell_cooldown(result.symbol):
+                continue
+
+            holding = held_map[result.symbol]
+
+            # 쿨다운 설정 후 매도 회의 소집
+            await _set_sell_cooldown(result.symbol, ttl=1800)
+
+            sell_reason = (
+                f"퀀트 스캔 {result.action.value} (점수: {result.composite_score}/100, "
+                f"매도 트리거 {result.bearish_count}개)"
+            )
+
+            await council_orchestrator.start_sell_meeting(
+                symbol=holding.symbol,
+                company_name=holding.name,
+                sell_reason=sell_reason,
+                current_holdings=holding.quantity,
+                avg_buy_price=holding.avg_price,
+                current_price=holding.current_price,
+            )
+
+            triggered += 1
+            logger.info(
+                f"Quant scan sell trigger: {holding.symbol} ({holding.name}) "
+                f"- {result.action.value}, score={result.composite_score}"
+            )
+
+        return triggered
+
+    except Exception as e:
+        logger.error(f"Sell signals cross-check failed: {e}")
+        return 0
+
+
+async def _evaluate_price_triggers(holding):
+    """
+    가격 기반 매도 트리거 평가.
+    Returns: (trigger_type, sell_reason) 또는 None.
+
+    1. 손절: profit_rate <= -5%
+    2. 익절: profit_rate >= 20%
+    3. 기술 악화: technical_score <= 3
+    """
+    # 트리거 1: 손절
+    if holding.profit_rate <= -5.0:
+        return ("stop_loss", f"손절 발동: {holding.profit_rate:+.2f}%")
+
+    # 트리거 2: 익절
+    if holding.profit_rate >= 20.0:
+        return ("take_profit", f"익절 기회: {holding.profit_rate:+.2f}%")
+
+    # 트리거 3: 기술적 악화
+    try:
+        from app.services.kiwoom.rest_client import kiwoom_client
+        from app.services.council.technical_indicators import technical_calculator
+
+        if not await kiwoom_client.is_connected():
+            await kiwoom_client.connect()
+
+        daily_prices = await kiwoom_client.get_daily_prices(holding.symbol)
+        if daily_prices:
+            tech_result = technical_calculator.analyze(holding.symbol, daily_prices)
+            if tech_result.technical_score is not None and tech_result.technical_score <= 3:
+                return (
+                    "technical",
+                    f"기술적 악화: 점수 {tech_result.technical_score}/10",
+                )
+    except Exception as e:
+        logger.warning(f"Technical analysis failed for {holding.symbol}: {e}")
+
+    return None
 
 
 @celery_app.task(name="app.services.tasks.cleanup_old_data")

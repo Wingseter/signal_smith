@@ -79,6 +79,13 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
+    # 보유 종목 매도 감시 - 5분마다 (손절/익절/기술 악화)
+    "monitor-holdings-sell": {
+        "task": "app.services.tasks.monitor_holdings_sell",
+        "schedule": 300.0,  # Every 5 minutes
+        "options": {"queue": "default"},
+    },
+
     # 종목 유니버스 갱신 - 매일 08:50 (장 시작 전)
     "refresh-stock-universe": {
         "task": "app.services.tasks.refresh_stock_universe",
@@ -101,5 +108,6 @@ celery_app.conf.task_routes = {
     "app.services.tasks.cleanup_old_data": {"queue": "low_priority"},
     "app.services.tasks.collect_historical_prices": {"queue": "low_priority"},
     "app.services.tasks.scan_signals": {"queue": "default"},
+    "app.services.tasks.monitor_holdings_sell": {"queue": "default"},
     "app.services.tasks.refresh_stock_universe": {"queue": "default"},
 }
