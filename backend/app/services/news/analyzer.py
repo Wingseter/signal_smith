@@ -138,13 +138,25 @@ class NewsAnalyzer:
 
                 elif line.startswith("감성:"):
                     sentiment = line.replace("감성:", "").strip().lower()
-                    if sentiment in ["very_positive", "positive", "neutral", "negative", "very_negative"]:
-                        result["sentiment"] = sentiment
+                    # 한글 감성 매핑
+                    sentiment_map = {
+                        "매우 긍정": "very_positive", "매우긍정": "very_positive", "매우 긍정적": "very_positive",
+                        "긍정": "positive", "긍정적": "positive",
+                        "중립": "neutral", "중립적": "neutral",
+                        "부정": "negative", "부정적": "negative",
+                        "매우 부정": "very_negative", "매우부정": "very_negative", "매우 부정적": "very_negative",
+                    }
+                    mapped = sentiment_map.get(sentiment, sentiment)
+                    if mapped in ["very_positive", "positive", "neutral", "negative", "very_negative"]:
+                        result["sentiment"] = mapped
 
                 elif line.startswith("신호:"):
                     signal = line.replace("신호:", "").strip().upper()
-                    if signal in ["BUY", "SELL", "HOLD"]:
-                        result["signal"] = signal
+                    # 한글 신호 매핑
+                    signal_map = {"매수": "BUY", "매도": "SELL", "보유": "HOLD", "관망": "HOLD"}
+                    mapped_signal = signal_map.get(signal.replace(" ", ""), signal)
+                    if mapped_signal in ["BUY", "SELL", "HOLD"]:
+                        result["signal"] = mapped_signal
 
                 elif line.startswith("신뢰도:"):
                     confidence_text = line.replace("신뢰도:", "").strip()
@@ -209,8 +221,8 @@ class NewsAnalyzer:
             response = await self._model.generate_content_async(
                 prompt,
                 generation_config=genai.GenerationConfig(
-                    temperature=0.3,  # 일관된 분석을 위해 낮은 temperature
-                    max_output_tokens=200,
+                    temperature=0.3,
+                    max_output_tokens=4096,
                 )
             )
 
