@@ -24,4 +24,4 @@ def is_market_hours() -> bool:
     from app.services.council.trading_hours import trading_hours, MarketSession
 
     session = trading_hours.get_market_session()
-    return session in (MarketSession.REGULAR, MarketSession.CLOSING_AUCTION)
+    return session in (MarketSession.REGULAR,)
