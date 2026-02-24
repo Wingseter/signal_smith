@@ -285,6 +285,7 @@ class TradingService:
         stop_loss: Optional[float] = None,
         quantity: Optional[int] = None,
         signal_status: Optional[str] = None,
+        trigger_details: Optional[Dict[str, Any]] = None,
     ) -> int:
         """AI 트레이딩 시그널 생성"""
         async with async_session_maker() as session:
@@ -298,6 +299,7 @@ class TradingService:
                 stop_loss=Decimal(str(stop_loss)) if stop_loss else None,
                 quantity=quantity,
                 signal_status=signal_status,
+                trigger_details=trigger_details,
             )
             session.add(signal)
             await session.commit()

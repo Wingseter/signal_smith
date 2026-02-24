@@ -143,6 +143,7 @@ class CouncilOrchestrator:
         available_amount: int = 1000000,
         current_price: int = 0,
         trigger_source: str = "news",
+        quant_triggers: Optional[dict] = None,
     ) -> CouncilMeeting:
         """AI 투자 회의 시작"""
 
@@ -495,7 +496,9 @@ class CouncilOrchestrator:
 
         # 콜백 알림
         await self._notify_signal(signal)
-        await self._persist_signal_to_db(signal, trigger_source=meeting.trigger_source)
+        await self._persist_signal_to_db(
+            signal, trigger_source=meeting.trigger_source, trigger_details=quant_triggers,
+        )
 
         logger.info(f"AI 회의 완료: {company_name} - {signal.action} {signal.allocation_percent}%")
 
@@ -694,7 +697,9 @@ class CouncilOrchestrator:
         logger.info(f"HOLD 결정: 조건 미충족 (비율: {final_percent}%, 평균: {avg_score:.1f})")
         return "HOLD"
 
-    async def _persist_signal_to_db(self, signal: InvestmentSignal, trigger_source: str = "news"):
+    async def _persist_signal_to_db(
+        self, signal: InvestmentSignal, trigger_source: str = "news", trigger_details: Optional[dict] = None,
+    ):
         """Council 시그널을 DB에 저장"""
         try:
             db_id = await trading_service.create_trading_signal(
@@ -707,6 +712,7 @@ class CouncilOrchestrator:
                 stop_loss=float(signal.stop_loss_price) if signal.stop_loss_price else None,
                 quantity=signal.suggested_quantity,
                 signal_status=signal.status.value,
+                trigger_details=trigger_details,
             )
             signal._db_id = db_id  # DB ID 참조 저장
             logger.info(f"Council signal → DB: {signal.symbol} {signal.action} (id={db_id})")

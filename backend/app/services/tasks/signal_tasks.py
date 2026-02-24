@@ -624,6 +624,24 @@ async def _check_buy_signals_for_council(results) -> int:
             except Exception as e:
                 logger.warning(f"잔고 조회 실패, 기본값 사용: {e}")
 
+            # 퀀트 트리거 상세 정보 구축
+            quant_triggers = {
+                "composite_score": result.composite_score,
+                "bullish_count": result.bullish_count,
+                "bearish_count": result.bearish_count,
+                "triggers": [
+                    {
+                        "id": t.trigger_id,
+                        "name": t.name,
+                        "signal": t.signal.value if hasattr(t.signal, "value") else str(t.signal),
+                        "score": t.score,
+                        "details": t.details,
+                    }
+                    for t in result.triggers
+                    if t.signal.value != "neutral"
+                ],
+            }
+
             await council_orchestrator.start_meeting(
                 symbol=result.symbol,
                 company_name=company_name,
@@ -635,6 +653,7 @@ async def _check_buy_signals_for_council(results) -> int:
                 available_amount=available_amount,
                 current_price=result.indicators.current_price if result.indicators else 0,
                 trigger_source="quant",
+                quant_triggers=quant_triggers,
             )
             triggered += 1
             logger.info(f"Quant BUY → council: {result.symbol}, score={result.composite_score}")
