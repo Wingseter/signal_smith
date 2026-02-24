@@ -111,7 +111,10 @@ class QuantAnalyst:
         if not settings.openai_api_key:
             raise ValueError("OPENAI_API_KEY가 설정되지 않았습니다")
 
-        self._client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self._client = AsyncOpenAI(
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+        )
         self._initialized = True
         logger.info(f"GPT 퀀트 분석가 초기화 (모델: {settings.openai_model})")
 

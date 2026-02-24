@@ -26,7 +26,7 @@ class ClaudeFundamentalAgent:
         """Lazy initialization of Anthropic client."""
         if self._client is None and self.api_key:
             from anthropic import AsyncAnthropic
-            self._client = AsyncAnthropic(api_key=self.api_key)
+            self._client = AsyncAnthropic(api_key=self.api_key, base_url=settings.anthropic_base_url)
         return self._client
 
     def _format_financial_data(self, data: dict) -> str:

@@ -109,7 +109,10 @@ class FundamentalAnalyst:
         if not settings.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY가 설정되지 않았습니다")
 
-        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        self._client = anthropic.AsyncAnthropic(
+            api_key=settings.anthropic_api_key,
+            base_url=settings.anthropic_base_url,
+        )
         self._initialized = True
         logger.info(f"Claude 펀더멘털 분석가 초기화 (모델: {settings.anthropic_model})")
 

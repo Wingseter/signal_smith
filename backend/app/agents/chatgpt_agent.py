@@ -26,7 +26,7 @@ class ChatGPTQuantAgent:
         """Lazy initialization of OpenAI client."""
         if self._client is None and self.api_key:
             from openai import AsyncOpenAI
-            self._client = AsyncOpenAI(api_key=self.api_key)
+            self._client = AsyncOpenAI(api_key=self.api_key, base_url=settings.openai_base_url)
         return self._client
 
     def _calculate_basic_indicators(self, price_data: List[dict]) -> Dict[str, Any]:

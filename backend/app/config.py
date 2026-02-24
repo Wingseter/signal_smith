@@ -45,10 +45,12 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
 
     # Anthropic
     anthropic_api_key: Optional[str] = None
+    anthropic_base_url: Optional[str] = None
     anthropic_model: str = "claude-3-opus-20240229"
 
     # Google Gemini
