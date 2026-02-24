@@ -201,6 +201,12 @@ KOREAN_STOCK_MAP = {
     "와이지엔터테인먼트": "122870",
     "YG": "122870",
 
+    # 화장품/생활용품
+    "코스맥스": "044820",
+    "한국콜마": "161890",
+    "아모레퍼시픽": "090430",
+    "LG생활건강": "051900",
+
     # KOSDAQ 인기 종목
     "펄어비스": "263750",
     "CJ ENM": "035760",
@@ -309,3 +315,17 @@ def lookup_stock_code(company_name: str) -> str | None:
             return code if code != "N/A" else None
 
     return None
+
+
+# 역방향 매핑 (종목코드 → 회사명) - 자동 생성
+_REVERSE_STOCK_MAP: dict[str, str] = {}
+for _name, _code in KOREAN_STOCK_MAP.items():
+    if _code != "N/A" and _code not in _REVERSE_STOCK_MAP:
+        _REVERSE_STOCK_MAP[_code] = _name
+
+
+def lookup_company_name(symbol: str) -> str | None:
+    """종목코드로 회사명 조회"""
+    if not symbol:
+        return None
+    return _REVERSE_STOCK_MAP.get(symbol)

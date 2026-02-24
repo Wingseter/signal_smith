@@ -135,7 +135,11 @@ class NewsTrader:
             return
 
         symbol = article.symbol
-        company_name = article.company_name or analysis.article.company_name or symbol
+        company_name = article.company_name or analysis.article.company_name
+        # 회사명이 없으면 역방향 매핑으로 조회
+        if not company_name:
+            from .models import lookup_company_name
+            company_name = lookup_company_name(symbol) or symbol
 
         # 거래 가능 여부 확인 (쿨다운, 일일 한도 등)
         can_trade, reason = self._can_trade(symbol)
