@@ -167,7 +167,7 @@ class FundamentalAnalyst:
         try:
             response = await self._client.messages.create(
                 model=settings.anthropic_model,
-                max_tokens=500,
+                max_tokens=2048,
                 system=self.SYSTEM_PROMPT,
                 messages=[
                     {"role": "user", "content": prompt},

@@ -174,7 +174,7 @@ class QuantAnalyst:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
-                max_tokens=700,
+                max_tokens=2048,
             )
 
             response_text = response.choices[0].message.content
@@ -332,8 +332,8 @@ class QuantAnalyst:
                     {"role": "system", "content": "당신은 퀀트 분석 전문가입니다. 기술적 지표를 분석하여 매매 신호를 검증합니다."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3,  # 낮은 온도로 일관성 유지
-                max_tokens=400,
+                temperature=0.3,
+                max_tokens=2048,
             )
 
             response_text = response.choices[0].message.content
