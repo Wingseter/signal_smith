@@ -205,7 +205,7 @@ class CouncilOrchestrator:
                     previous_messages=meeting.messages,
                     technical_data=technical_data,  # 실제 차트 데이터 전달
                 ),
-                timeout=15.0  # 타임아웃 15초 강제
+                timeout=60.0  # 타임아웃 15초 강제
             )
             meeting.add_message(quant_msg)
             await self._notify_meeting_update(meeting)
@@ -236,7 +236,7 @@ class CouncilOrchestrator:
                     previous_messages=meeting.messages,
                     financial_data=financial_data,  # DART 재무제표 데이터 전달
                 ),
-                timeout=15.0  # 타임아웃 15초 강제
+                timeout=60.0  # 타임아웃 15초 강제
             )
             meeting.add_message(fundamental_msg)
             await self._notify_meeting_update(meeting)
@@ -271,7 +271,7 @@ class CouncilOrchestrator:
                     other_analysis=fundamental_msg.content,
                     technical_data=technical_data,  # 실제 차트 데이터 전달
                 ),
-                timeout=15.0  # 타임아웃 강제
+                timeout=60.0  # 타임아웃 강제
             )
             meeting.add_message(quant_response)
             await self._notify_meeting_update(meeting)
@@ -299,7 +299,7 @@ class CouncilOrchestrator:
                     previous_messages=meeting.messages,
                     other_analysis=quant_response.content,
                 ),
-                timeout=15.0  # 타임아웃 강제
+                timeout=60.0  # 타임아웃 강제
             )
             meeting.add_message(fundamental_response)
             await self._notify_meeting_update(meeting)
@@ -331,7 +331,7 @@ class CouncilOrchestrator:
                     quant_percent=quant_percent,
                     fundamental_percent=fundamental_percent,
                 ),
-                timeout=15.0  # 타임아웃 강제
+                timeout=60.0  # 타임아웃 강제
             )
             meeting.add_message(consensus_msg)
             await self._notify_meeting_update(meeting)
@@ -764,7 +764,7 @@ class CouncilOrchestrator:
                     technical_data=technical_data,
                     request=request_prompt,
                 ),
-                timeout=15.0,
+                timeout=60.0,
             )
 
             # 3. 응답에서 target_price, stop_loss 추출 → clamp 적용
@@ -869,7 +869,7 @@ class CouncilOrchestrator:
                     technical_data=technical_data,
                     request=f"현재 보유 중인 종목의 매도 타이밍을 분석해주세요. 수익률 {profit_loss:+.1f}%, 사유: {sell_reason}",
                 ),
-                timeout=15.0  # 타임아웃 강제
+                timeout=60.0  # 타임아웃 강제
             )
             meeting.add_message(quant_msg)
             await self._notify_meeting_update(meeting)
