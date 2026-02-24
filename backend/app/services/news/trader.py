@@ -24,7 +24,7 @@ class TradingConfig:
     enabled: bool = False                    # 자동매매 활성화
     council_threshold: int = 6               # AI 회의 소집 기준 점수 (이상) - 6점 이상이면 회의 소집
     sell_threshold: int = 4                  # 매도 기준 점수 (이하) - 4점 이하면 매도 신호
-    max_position_per_stock: int = 500000     # 종목당 최대 투자금
+    max_position_per_stock: int = 5000000    # 종목당 최대 투자금 (상한 캡)
     max_daily_trades: int = 10               # 일일 최대 거래 횟수
     cooldown_minutes: int = 30               # 같은 종목 재매매 대기 시간
     require_symbol: bool = True              # 종목코드 필수 (True: 종목코드 없으면 회의 안 함)
@@ -154,8 +154,19 @@ class NewsTrader:
             # 회의 시작
             council = self._get_council()
 
-            # 가용 자금 조회 (실제로는 키움 API에서)
+            # 키움 API에서 실제 주문가능금액 조회
             available_amount = self.config.max_position_per_stock
+            try:
+                from app.services.kiwoom.rest_client import kiwoom_client
+                if not await kiwoom_client.is_connected():
+                    await kiwoom_client.connect()
+                balance = await kiwoom_client.get_balance()
+                if balance.available_amount > 0:
+                    # 실제 주문가능금액과 종목당 상한 중 작은 값
+                    available_amount = min(balance.available_amount, self.config.max_position_per_stock)
+                    logger.info(f"주문가능금액: {balance.available_amount:,}원, 종목당 상한: {self.config.max_position_per_stock:,}원 → {available_amount:,}원")
+            except Exception as e:
+                logger.warning(f"잔고 조회 실패, 기본값 사용: {e}")
 
             meeting = await council.start_meeting(
                 symbol=symbol,
@@ -163,7 +174,7 @@ class NewsTrader:
                 news_title=article.title,
                 news_score=analysis.score,
                 available_amount=available_amount,
-                current_price=0,  # 실제로는 현재가 조회 필요
+                current_price=0,
             )
 
             # 거래 기록

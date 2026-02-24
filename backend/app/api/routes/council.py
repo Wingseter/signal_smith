@@ -28,7 +28,7 @@ class CouncilConfig(BaseModel):
     council_threshold: int = 7
     sell_threshold: int = 3
     auto_execute: bool = True
-    max_position_per_stock: int = 500000
+    max_position_per_stock: int = 5000000
     poll_interval: int = 60
 
 

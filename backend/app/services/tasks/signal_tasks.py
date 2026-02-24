@@ -612,6 +612,18 @@ async def _check_buy_signals_for_council(results) -> int:
 
             await redis.setex(cooldown_key, 3600, "1")  # 60분 쿨다운
 
+            # 키움 API에서 실제 주문가능금액 조회
+            available_amount = 5000000  # 기본값
+            try:
+                from app.services.kiwoom.rest_client import kiwoom_client
+                if not await kiwoom_client.is_connected():
+                    await kiwoom_client.connect()
+                balance = await kiwoom_client.get_balance()
+                if balance.available_amount > 0:
+                    available_amount = min(balance.available_amount, 5000000)
+            except Exception as e:
+                logger.warning(f"잔고 조회 실패, 기본값 사용: {e}")
+
             await council_orchestrator.start_meeting(
                 symbol=result.symbol,
                 company_name=company_name,
@@ -620,7 +632,7 @@ async def _check_buy_signals_for_council(results) -> int:
                     f"(점수: {result.composite_score}/100, 매수 {result.bullish_count}개)"
                 ),
                 news_score=8 if result.action == SignalAction.STRONG_BUY else 7,
-                available_amount=500000,
+                available_amount=available_amount,
                 current_price=result.indicators.current_price if result.indicators else 0,
                 trigger_source="quant",
             )
