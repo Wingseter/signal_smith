@@ -112,13 +112,25 @@ class GeminiNewsAgent:
             Respond only with valid JSON.
             """
 
-            response = await client.generate_content_async(prompt)
+            import google.generativeai as genai
+            response = await client.generate_content_async(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=4096,
+                ),
+            )
 
-            # Parse response
+            # Parse response - handle markdown code blocks from Gemini 2.5+
             import json
             try:
-                result = json.loads(response.text)
-            except json.JSONDecodeError:
+                text = response.text
+                if "```json" in text:
+                    text = text.split("```json")[1].split("```")[0]
+                elif "```" in text:
+                    text = text.split("```")[1].split("```")[0]
+                result = json.loads(text.strip())
+            except (json.JSONDecodeError, IndexError):
                 result = {
                     "sentiment_score": 0,
                     "summary": response.text[:500],
@@ -185,12 +197,24 @@ class GeminiNewsAgent:
             }}
             """
 
-            response = await client.generate_content_async(prompt)
+            import google.generativeai as genai
+            response = await client.generate_content_async(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=4096,
+                ),
+            )
 
             import json
             try:
-                return json.loads(response.text)
-            except json.JSONDecodeError:
+                text = response.text
+                if "```json" in text:
+                    text = text.split("```json")[1].split("```")[0]
+                elif "```" in text:
+                    text = text.split("```")[1].split("```")[0]
+                return json.loads(text.strip())
+            except (json.JSONDecodeError, IndexError):
                 return {
                     "impact_level": "medium",
                     "sentiment": "neutral",
@@ -243,13 +267,26 @@ class GeminiNewsAgent:
             }}
             """
 
-            response = await client.generate_content_async(prompt)
+            import google.generativeai as genai
+            response = await client.generate_content_async(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=4096,
+                ),
+            )
 
             try:
-                result = json.loads(response.text)
+                text = response.text
+                # Gemini 2.5+ may wrap JSON in markdown code blocks
+                if "```json" in text:
+                    text = text.split("```json")[1].split("```")[0]
+                elif "```" in text:
+                    text = text.split("```")[1].split("```")[0]
+                result = json.loads(text.strip())
                 result["analyzed_at"] = datetime.utcnow().isoformat()
                 return result
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, IndexError):
                 return {
                     "market": market,
                     "overall_sentiment": "neutral",
@@ -341,17 +378,32 @@ class GeminiNewsAgent:
             }}
             """
 
-            response = await client.generate_content_async(prompt)
+            import google.generativeai as genai
+            response = await client.generate_content_async(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.3,
+                    max_output_tokens=4096,
+                ),
+            )
 
             try:
-                result = json.loads(response.text)
-            except json.JSONDecodeError:
-                # Try to extract JSON from response
+                text = response.text
+                if "```json" in text:
+                    text = text.split("```json")[1].split("```")[0]
+                elif "```" in text:
+                    text = text.split("```")[1].split("```")[0]
+                result = json.loads(text.strip())
+            except (json.JSONDecodeError, IndexError):
+                # Fallback: try to extract JSON from response
                 text = response.text
                 start = text.find("{")
                 end = text.rfind("}") + 1
                 if start >= 0 and end > start:
-                    result = json.loads(text[start:end])
+                    try:
+                        result = json.loads(text[start:end])
+                    except json.JSONDecodeError:
+                        result = {"analysis": text[:500]}
                 else:
                     result = {"analysis": text[:500]}
 

@@ -29,7 +29,7 @@ def analyze_market_news(self):
         agent = GeminiNewsAgent()
         market_sentiment = await agent.get_market_sentiment("KOSPI")
 
-        logger.info(f"Market sentiment analysis: {market_sentiment.get('sentiment', 'unknown')}")
+        logger.info(f"Market sentiment analysis: {market_sentiment.get('overall_sentiment', 'unknown')}")
 
         from app.core.redis import get_redis
         import json
@@ -44,7 +44,7 @@ def analyze_market_news(self):
         market_sentiment = run_async(_analyze())
         return {
             "status": "success",
-            "sentiment": market_sentiment.get("sentiment"),
+            "sentiment": market_sentiment.get("overall_sentiment"),
             "score": market_sentiment.get("sentiment_score"),
         }
     except Exception as e:
