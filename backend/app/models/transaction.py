@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, Numeric, String, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, JSON, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -67,6 +67,7 @@ class TradingSignal(Base):
     quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 주문 수량
     signal_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # pending/queued/auto_executed
     trigger_details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 퀀트 트리거 상세
+    holding_deadline: Mapped[Optional[date]] = mapped_column(Date, nullable=True)  # 보유 기한 (초과 시 매도)
     is_executed: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

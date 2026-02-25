@@ -6,7 +6,7 @@ Trading Service
 """
 
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -286,6 +286,7 @@ class TradingService:
         quantity: Optional[int] = None,
         signal_status: Optional[str] = None,
         trigger_details: Optional[Dict[str, Any]] = None,
+        holding_deadline: Optional[date] = None,
         is_executed: bool = False,
     ) -> int:
         """AI 트레이딩 시그널 생성"""
@@ -301,6 +302,7 @@ class TradingService:
                 quantity=quantity,
                 signal_status=signal_status,
                 trigger_details=trigger_details,
+                holding_deadline=holding_deadline,
                 is_executed=is_executed,
             )
             session.add(signal)

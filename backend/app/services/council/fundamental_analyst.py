@@ -258,6 +258,37 @@ class FundamentalAnalyst:
             request=request,
         )
 
+    CONSENSUS_PROMPT = """지금까지의 논의를 종합하여 최종 투자 결론을 내려주세요.
+
+[종목 정보]
+종목코드: {symbol}
+종목명: {company_name}
+트리거: {news_title}
+
+[이전 대화]
+{conversation}
+
+[합의 기준점]
+퀀트 분석 제안: {quant_percent}%
+펀더멘털 분석 제안: {fundamental_percent}%
+평균값: {avg_percent:.1f}%
+
+[요청]
+두 분석을 종합하여 최종 투자 비율을 결정해주세요.
+이 전략은 단기 스윙 매매입니다. 목표가 미달 시 정해진 기간 후 매도하여 더 좋은 기회에 재투자하므로,
+**보유 기한(캘린더 기준 일수)**도 함께 결정해주세요.
+
+[응답 형식]
+다음 JSON 형식으로 응답해주세요:
+{{
+    "analysis": "합의 근거 (2-3문장)",
+    "score": 1-10 사이 점수,
+    "suggested_percent": 최종 투자 비율 (0-100),
+    "reasoning": "투자 비율 산정 근거",
+    "holding_days": 보유 기한 일수 (최소 5, 최대 21),
+    "holding_rationale": "보유 기한 설정 근거 (1문장)"
+}}"""
+
     async def propose_consensus(
         self,
         symbol: str,
@@ -267,26 +298,76 @@ class FundamentalAnalyst:
         quant_percent: float,
         fundamental_percent: float,
     ) -> CouncilMessage:
-        """합의안 제안"""
+        """합의안 제안 (최종 투자 비율 + 보유 기한 결정)"""
+        self._initialize()
+
         avg_percent = (quant_percent + fundamental_percent) / 2
+        conversation = self._build_conversation(previous_messages)
 
-        request = f"""지금까지의 논의를 종합해주세요.
-
-퀀트 분석 제안: {quant_percent}%
-펀더멘털 분석 제안: {fundamental_percent}%
-
-두 분석을 종합하여 최종 투자 비율을 제안하고,
-합의 근거를 설명해주세요.
-
-평균값 {avg_percent:.1f}%를 기준으로 조정이 필요하다면 근거와 함께 제시해주세요."""
-
-        return await self.analyze(
+        prompt = self.CONSENSUS_PROMPT.format(
             symbol=symbol,
             company_name=company_name,
             news_title=news_title,
-            previous_messages=previous_messages,
-            request=request,
+            conversation=conversation,
+            quant_percent=quant_percent,
+            fundamental_percent=fundamental_percent,
+            avg_percent=avg_percent,
         )
+
+        try:
+            response = await self._client.messages.create(
+                model=settings.anthropic_model,
+                max_tokens=1024,
+                system=self.SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = response.content[0].text
+
+            try:
+                if "```json" in response_text:
+                    json_str = response_text.split("```json")[1].split("```")[0]
+                elif "```" in response_text:
+                    json_str = response_text.split("```")[1].split("```")[0]
+                else:
+                    json_str = response_text
+
+                data = json.loads(json_str.strip())
+                holding_days = data.get("holding_days", 7)
+                holding_days = max(5, min(21, int(holding_days)))  # 5~21일 바운드
+
+                content = f"""⚖️ **최종 합의**
+
+{data.get('analysis', '')}
+
+• 합의 점수: {data.get('score', 5)}/10
+• 최종 투자 비율: {data.get('suggested_percent', 0)}%
+• 근거: {data.get('reasoning', '')}
+
+⏰ 보유 기한: {holding_days}일 (목표가 미달 시 자동 매도)
+• {data.get('holding_rationale', '')}"""
+
+                data["holding_days"] = holding_days
+
+            except json.JSONDecodeError:
+                content = f"⚖️ **최종 합의**\n\n{response_text}"
+                data = {"score": 5, "suggested_percent": avg_percent, "holding_days": 7}
+
+            return CouncilMessage(
+                role=AnalystRole.CLAUDE_FUNDAMENTAL,
+                speaker="Claude 합의 도출",
+                content=content,
+                data=data,
+            )
+
+        except Exception as e:
+            logger.error(f"합의 도출 오류: {e}")
+            return CouncilMessage(
+                role=AnalystRole.CLAUDE_FUNDAMENTAL,
+                speaker="Claude 합의 도출",
+                content=f"⚠️ 합의 도출 중 오류: {str(e)}",
+                data={"score": 5, "suggested_percent": avg_percent, "holding_days": 7},
+            )
 
 
 # 싱글톤 인스턴스

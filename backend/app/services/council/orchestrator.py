@@ -9,7 +9,7 @@ v3: 자동 매매, SELL 시그널, 거래 시간 체크, 비용 관리 추가
 
 import logging
 import asyncio
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Optional, List, Callable, Awaitable
 
 from app.config import settings
@@ -353,6 +353,13 @@ class CouncilOrchestrator:
         if final_percent == 0:
             final_percent = (quant_percent + fundamental_percent) / 2
 
+        # 보유 기한 결정 (consensus_msg.data에서 holding_days 추출)
+        holding_days = 7  # 기본값
+        if consensus_msg.data:
+            raw_days = consensus_msg.data.get("holding_days", 7)
+            holding_days = max(5, min(21, int(raw_days)))
+        holding_deadline = date.today() + timedelta(days=holding_days)
+
         # 5. 시그널 생성
         suggested_amount = int(available_amount * abs(final_percent) / 100)
         suggested_quantity = suggested_amount // current_price if current_price > 0 else 0
@@ -478,6 +485,7 @@ class CouncilOrchestrator:
 • 손절가: {stop_loss:,}원
 • 목표가: {target_price:,}원"""
 
+        deadline_str = holding_deadline.strftime("%Y-%m-%d") if signal.action == "BUY" else "해당없음"
         conclusion_msg = CouncilMessage(
             role=AnalystRole.MODERATOR,
             speaker="회의 중재자",
@@ -491,6 +499,7 @@ class CouncilOrchestrator:
 퀀트 점수: {signal.quant_score}/10
 펀더멘털 점수: {signal.fundamental_score}/10
 {price_info}
+⏰ 보유 기한: {deadline_str} ({holding_days}일, 목표가 미달 시 자동 매도)
 
 상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 구매 대기 중 (장 개시 후 자동 체결)" if signal.status == SignalStatus.QUEUED else "⏳ 승인 대기 중"}
 
@@ -510,7 +519,10 @@ class CouncilOrchestrator:
         # 콜백 알림
         await self._notify_signal(signal)
         await self._persist_signal_to_db(
-            signal, trigger_source=meeting.trigger_source, trigger_details=quant_triggers,
+            signal,
+            trigger_source=meeting.trigger_source,
+            trigger_details=quant_triggers,
+            holding_deadline=holding_deadline if signal.action == "BUY" else None,
         )
 
         logger.info(f"AI 회의 완료: {company_name} - {signal.action} {signal.allocation_percent}%")
@@ -711,7 +723,11 @@ class CouncilOrchestrator:
         return "HOLD"
 
     async def _persist_signal_to_db(
-        self, signal: InvestmentSignal, trigger_source: str = "news", trigger_details: Optional[dict] = None,
+        self,
+        signal: InvestmentSignal,
+        trigger_source: str = "news",
+        trigger_details: Optional[dict] = None,
+        holding_deadline: Optional[date] = None,
     ):
         """Council 시그널을 DB에 저장"""
         try:
@@ -727,6 +743,7 @@ class CouncilOrchestrator:
                 quantity=signal.suggested_quantity,
                 signal_status=signal.status.value,
                 trigger_details=trigger_details,
+                holding_deadline=holding_deadline,
                 is_executed=is_executed,
             )
             signal._db_id = db_id  # DB ID 참조 저장

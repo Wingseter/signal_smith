@@ -2,7 +2,7 @@
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 import time
@@ -952,18 +952,86 @@ def rebalance_holdings(self):
             f"{len(escalated)}건 매도 에스컬레이션"
         )
 
+        # 보유 기한 만료 체크
+        deadline_triggered = run_async(_check_holding_deadlines(holdings))
+
         return {
             "status": "success",
             "total_holdings": len(holdings),
             "reviewed": len(reviewed),
             "escalated": len(escalated),
             "escalated_symbols": escalated,
+            "deadline_triggered": deadline_triggered,
             "details": reviewed,
         }
 
     except Exception as e:
         logger.error(f"[리밸런싱] 전체 오류: {e}")
         self.retry(exc=e)
+
+
+async def _check_holding_deadlines(holdings) -> int:
+    """보유 기한 만료 종목 체크 → 매도 회의 소집.
+
+    TradingSignal.holding_deadline <= today 이고 목표가 미달 시 매도 회의 트리거.
+    """
+    from app.services.council.orchestrator import council_orchestrator
+
+    triggered = 0
+    today = date.today()
+
+    held_map = {h.symbol: h for h in holdings} if holdings else {}
+    if not held_map:
+        return 0
+
+    with get_sync_db() as db:
+        expired_signals = (
+            db.execute(
+                select(TradingSignal).where(
+                    TradingSignal.signal_type == "buy",
+                    TradingSignal.is_executed == False,
+                    TradingSignal.holding_deadline.isnot(None),
+                    TradingSignal.holding_deadline <= today,
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    for signal in expired_signals:
+        holding = held_map.get(signal.symbol)
+        if not holding:
+            continue  # 이미 매도된 종목
+
+        # 목표가에 도달했으면 스킵 (이미 익절)
+        if signal.target_price and holding.current_price >= float(signal.target_price):
+            continue
+
+        logger.info(
+            f"[기한만료] {signal.symbol}: deadline={signal.holding_deadline}, "
+            f"current={holding.current_price:,}, target={signal.target_price}"
+        )
+
+        try:
+            await council_orchestrator.start_sell_meeting(
+                symbol=holding.symbol,
+                company_name=holding.name,
+                sell_reason=(
+                    f"보유 기한 만료 ({signal.holding_deadline.strftime('%Y-%m-%d')}): "
+                    f"목표가 미달, 자본 재투자 목적 매도"
+                ),
+                current_holdings=holding.quantity,
+                avg_buy_price=holding.avg_price,
+                current_price=holding.current_price,
+            )
+            triggered += 1
+        except Exception as e:
+            logger.error(f"[기한만료] {signal.symbol} 매도 회의 소집 실패: {e}")
+
+    if triggered:
+        logger.info(f"[기한만료] {triggered}건 매도 회의 소집 완료")
+
+    return triggered
 
 
 def _update_signal_prices(
