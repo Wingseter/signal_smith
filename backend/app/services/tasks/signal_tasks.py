@@ -289,24 +289,12 @@ def monitor_holdings_sell(self):
     default_retry_delay=60,
 )
 def process_council_queue(self):
-    """Process queued council executions when market opens."""
+    """Process queued council executions when market opens (DB-based)."""
     if not is_market_hours():
         return {"status": "skipped", "reason": "market_closed"}
 
     try:
-        from app.services.council.orchestrator import council_orchestrator
-
-        queued = council_orchestrator.get_queued_executions()
-        if not queued:
-            return {"status": "success", "message": "no_queued_signals"}
-
-        executed = run_async(council_orchestrator.process_queued_executions())
-
-        return {
-            "status": "success",
-            "queued_before": len(queued),
-            "executed": len(executed),
-        }
+        return run_async(_process_council_queue_from_db())
     except Exception as e:
         logger.error(f"Council queue processing failed: {e}")
         self.retry(exc=e)
@@ -509,6 +497,81 @@ async def _set_sell_cooldown(symbol: str, ttl: int = SELL_COOLDOWN_SECONDS):
 
     redis = await get_redis()
     await redis.setex(f"sell_monitor:cooldown:{symbol}", ttl, "1")
+
+
+async def _process_council_queue_from_db() -> dict:
+    """DB의 queued 시그널을 직접 조회해서 체결 시도 (in-memory 큐 의존 제거)."""
+    from app.services.kiwoom.rest_client import kiwoom_client
+    from app.services.kiwoom.base import OrderSide, OrderType
+    from app.models.transaction import TradingSignal as TradingSignalModel
+
+    if not await kiwoom_client.is_connected():
+        try:
+            await kiwoom_client.connect()
+        except Exception as e:
+            logger.warning(f"키움 API 연결 실패: {e}")
+            return {"status": "error", "reason": str(e)}
+
+    with get_sync_db() as db:
+        queued_signals = (
+            db.execute(
+                select(TradingSignalModel).where(
+                    TradingSignalModel.signal_status == "queued",
+                    TradingSignalModel.is_executed == False,
+                    TradingSignalModel.signal_type.in_(["buy", "sell"]),
+                    TradingSignalModel.quantity > 0,
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    if not queued_signals:
+        return {"status": "success", "message": "no_queued_signals"}
+
+    executed = []
+    failed = []
+
+    for signal in queued_signals:
+        try:
+            side = OrderSide.BUY if signal.signal_type == "buy" else OrderSide.SELL
+            order_result = await kiwoom_client.place_order(
+                symbol=signal.symbol,
+                side=side,
+                quantity=signal.quantity,
+                price=0,
+                order_type=OrderType.MARKET,
+            )
+
+            with get_sync_db() as db:
+                db_signal = db.execute(
+                    select(TradingSignalModel).where(TradingSignalModel.id == signal.id)
+                ).scalar_one_or_none()
+                if db_signal:
+                    if order_result.status == "submitted":
+                        db_signal.signal_status = "auto_executed"
+                        db_signal.is_executed = True
+                        executed.append(signal.symbol)
+                        logger.info(
+                            f"✅ DB 큐 체결: {signal.symbol} {signal.signal_type} "
+                            f"{signal.quantity}주 (주문번호: {order_result.order_no})"
+                        )
+                    else:
+                        failed.append(signal.symbol)
+                        logger.warning(f"⚠️ DB 큐 체결 실패: {signal.symbol} - {order_result.message}")
+                    db.commit()
+
+        except Exception as e:
+            logger.error(f"❌ DB 큐 체결 오류: {signal.symbol} - {e}")
+            failed.append(signal.symbol)
+
+    return {
+        "status": "success",
+        "queued": len(queued_signals),
+        "executed": len(executed),
+        "failed": len(failed),
+        "executed_symbols": executed,
+    }
 
 
 async def _check_sell_signals_against_holdings(results) -> int:

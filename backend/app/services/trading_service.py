@@ -286,6 +286,7 @@ class TradingService:
         quantity: Optional[int] = None,
         signal_status: Optional[str] = None,
         trigger_details: Optional[Dict[str, Any]] = None,
+        is_executed: bool = False,
     ) -> int:
         """AI 트레이딩 시그널 생성"""
         async with async_session_maker() as session:
@@ -300,6 +301,7 @@ class TradingService:
                 quantity=quantity,
                 signal_status=signal_status,
                 trigger_details=trigger_details,
+                is_executed=is_executed,
             )
             session.add(signal)
             await session.commit()

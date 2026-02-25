@@ -415,8 +415,12 @@ class CouncilOrchestrator:
             signal.action = "HOLD"
             action = "HOLD"
 
-        # 자동 체결 여부 결정
-        if self.auto_execute and confidence >= self.min_confidence:
+        # HOLD는 체결 대상이 아님 — auto_execute 로직 건너뜀
+        if action == "HOLD":
+            signal.status = SignalStatus.PENDING
+
+        # 자동 체결 여부 결정 (BUY/SELL만)
+        elif self.auto_execute and confidence >= self.min_confidence:
             can_trade, trade_reason = trading_hours.can_execute_order()
 
             if can_trade or not self.respect_trading_hours:
@@ -711,6 +715,7 @@ class CouncilOrchestrator:
     ):
         """Council 시그널을 DB에 저장"""
         try:
+            is_executed = signal.status == SignalStatus.AUTO_EXECUTED
             db_id = await trading_service.create_trading_signal(
                 symbol=signal.symbol,
                 signal_type=signal.action.lower(),
@@ -722,6 +727,7 @@ class CouncilOrchestrator:
                 quantity=signal.suggested_quantity,
                 signal_status=signal.status.value,
                 trigger_details=trigger_details,
+                is_executed=is_executed,
             )
             signal._db_id = db_id  # DB ID 참조 저장
             logger.info(f"Council signal → DB: {signal.symbol} {signal.action} (id={db_id})")
