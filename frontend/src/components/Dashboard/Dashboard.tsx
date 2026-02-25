@@ -6,6 +6,7 @@ import { useMarketWebSocket, useTradingWebSocket } from '../../hooks';
 import { useCouncilStore } from '../../store/councilStore';
 import StockChart from '../Charts/StockChart';
 import { RealizedPnlPanel } from '../Council/RealizedPnlPanel';
+import { AccountHoldingsPanel } from '../Council/AccountHoldingsPanel';
 
 interface Signal {
   id: number;
@@ -660,6 +661,9 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* 보유 종목 현황 */}
+      <AccountHoldingsPanel />
 
       {/* 실현 수익 */}
       <RealizedPnlPanel />
