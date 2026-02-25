@@ -477,15 +477,20 @@ class CouncilOrchestrator:
         meeting.ended_at = datetime.now()
 
         # 6. 최종 결론 메시지
+        # BUY 시그널일 때만 매매 전략 및 보유 기한 표시
         price_info = ""
-        if entry_price:
+        if signal.action == "BUY" and entry_price:
             price_info = f"""
 📍 매매 전략:
 • 진입가: {entry_price:,}원
 • 손절가: {stop_loss:,}원
 • 목표가: {target_price:,}원"""
 
-        deadline_str = holding_deadline.strftime("%Y-%m-%d") if signal.action == "BUY" else "해당없음"
+        if signal.action == "BUY":
+            deadline_info = f"⏰ 보유 기한: {holding_deadline.strftime('%Y-%m-%d')} ({holding_days}일, 목표가 미달 시 자동 매도)"
+        else:
+            deadline_info = ""
+
         conclusion_msg = CouncilMessage(
             role=AnalystRole.MODERATOR,
             speaker="회의 중재자",
@@ -499,8 +504,7 @@ class CouncilOrchestrator:
 퀀트 점수: {signal.quant_score}/10
 펀더멘털 점수: {signal.fundamental_score}/10
 {price_info}
-⏰ 보유 기한: {deadline_str} ({holding_days}일, 목표가 미달 시 자동 매도)
-
+{deadline_info}
 상태: {"✅ 자동 체결됨" if signal.status == SignalStatus.AUTO_EXECUTED else "⏳ 구매 대기 중 (장 개시 후 자동 체결)" if signal.status == SignalStatus.QUEUED else "⏳ 승인 대기 중"}
 
 📊 데이터 소스:

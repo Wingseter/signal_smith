@@ -362,7 +362,10 @@ class TradingService:
         async with async_session_maker() as session:
             result = await session.execute(
                 select(TradingSignal)
-                .where(TradingSignal.is_executed == False)
+                .where(
+                    TradingSignal.is_executed == False,
+                    TradingSignal.signal_status.in_(["pending", "queued"]),
+                )
                 .order_by(TradingSignal.created_at.desc())
                 .limit(limit)
             )
