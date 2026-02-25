@@ -11,11 +11,22 @@ export function AccountHoldingsPanel() {
     refetchInterval: 30000,
     retry: 3,
     retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
-    staleTime: 15000,
+    staleTime: 25000,
   });
 
   const balance = summary?.balance;
   const holdingsData = summary ? { holdings: summary.holdings, count: summary.count } : undefined;
+  const updatedAt = (summary as any)?.updated_at;
+
+  // 마지막 갱신 시각을 상대적 표현으로 (예: "10초 전")
+  const getRelativeTime = (isoString: string | undefined) => {
+    if (!isoString) return null;
+    const diff = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+    if (diff < 5) return '방금 전';
+    if (diff < 60) return `${diff}초 전`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}분 전`;
+    return `${Math.floor(diff / 3600)}시간 전`;
+  };
 
   const handleRetry = () => {
     queryClient.invalidateQueries({ queryKey: ['council', 'account'] });
@@ -33,6 +44,11 @@ export function AccountHoldingsPanel() {
             </div>
           </div>
           <div className="flex items-center space-x-2">
+            {updatedAt && !isLoading && (
+              <span className="text-white/60 text-xs">
+                🕐 {getRelativeTime(updatedAt)} 갱신
+              </span>
+            )}
             {isLoading && (
               <span className="text-white/60 text-sm animate-pulse">갱신 중...</span>
             )}
@@ -89,23 +105,19 @@ export function AccountHoldingsPanel() {
               {(balance.total_evaluation / 10000).toLocaleString()}만원
             </p>
           </div>
-          <div className={`rounded-lg p-3 text-center ${
-            balance.total_profit_loss >= 0 ? 'bg-red-50' : 'bg-blue-50'
-          }`}>
-            <p className="text-xs text-gray-500 mb-1">총손익</p>
-            <p className={`text-lg font-bold ${
-              balance.total_profit_loss >= 0 ? 'text-red-600' : 'text-blue-600'
+          <div className={`rounded-lg p-3 text-center ${balance.total_profit_loss >= 0 ? 'bg-red-50' : 'bg-blue-50'
             }`}>
+            <p className="text-xs text-gray-500 mb-1">총손익</p>
+            <p className={`text-lg font-bold ${balance.total_profit_loss >= 0 ? 'text-red-600' : 'text-blue-600'
+              }`}>
               {balance.total_profit_loss >= 0 ? '+' : ''}{balance.total_profit_loss.toLocaleString()}원
             </p>
           </div>
-          <div className={`rounded-lg p-3 text-center ${
-            balance.profit_rate >= 0 ? 'bg-red-50' : 'bg-blue-50'
-          }`}>
-            <p className="text-xs text-gray-500 mb-1">수익률</p>
-            <p className={`text-lg font-bold ${
-              balance.profit_rate >= 0 ? 'text-red-600' : 'text-blue-600'
+          <div className={`rounded-lg p-3 text-center ${balance.profit_rate >= 0 ? 'bg-red-50' : 'bg-blue-50'
             }`}>
+            <p className="text-xs text-gray-500 mb-1">수익률</p>
+            <p className={`text-lg font-bold ${balance.profit_rate >= 0 ? 'text-red-600' : 'text-blue-600'
+              }`}>
               {balance.profit_rate >= 0 ? '+' : ''}{balance.profit_rate.toFixed(2)}%
             </p>
           </div>
@@ -149,14 +161,12 @@ export function AccountHoldingsPanel() {
                     <td className="text-right py-2 px-2 font-medium text-gray-800">
                       {holding.evaluation.toLocaleString()}
                     </td>
-                    <td className={`text-right py-2 px-2 font-medium ${
-                      holding.profit_loss >= 0 ? 'text-red-600' : 'text-blue-600'
-                    }`}>
+                    <td className={`text-right py-2 px-2 font-medium ${holding.profit_loss >= 0 ? 'text-red-600' : 'text-blue-600'
+                      }`}>
                       {holding.profit_loss >= 0 ? '+' : ''}{holding.profit_loss.toLocaleString()}
                     </td>
-                    <td className={`text-right py-2 px-2 font-bold ${
-                      holding.profit_rate >= 0 ? 'text-red-600' : 'text-blue-600'
-                    }`}>
+                    <td className={`text-right py-2 px-2 font-bold ${holding.profit_rate >= 0 ? 'text-red-600' : 'text-blue-600'
+                      }`}>
                       {holding.profit_rate >= 0 ? '+' : ''}{holding.profit_rate.toFixed(2)}%
                     </td>
                   </tr>

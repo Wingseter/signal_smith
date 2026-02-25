@@ -106,6 +106,13 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=15, minute=40),
         "options": {"queue": "default"},
     },
+
+    # 계좌 요약 (잔고+보유종목) 캐시 갱신 - 30초마다
+    "refresh-account-summary": {
+        "task": "app.services.tasks.refresh_account_summary",
+        "schedule": 30.0,
+        "options": {"queue": "high_priority"},
+    },
 }
 
 # Queue routing
@@ -126,4 +133,5 @@ celery_app.conf.task_routes = {
     "app.services.tasks.monitor_holdings_sell": {"queue": "default"},
     "app.services.tasks.refresh_stock_universe": {"queue": "default"},
     "app.services.tasks.rebalance_holdings": {"queue": "default"},
+    "app.services.tasks.refresh_account_summary": {"queue": "high_priority"},
 }

@@ -10,9 +10,9 @@ const navItems = [
   { path: '/', label: 'Dashboard', icon: '📊', description: 'AI 투자 현황' },
   { path: '/council', label: 'AI Council', icon: '🏛️', description: '실시간 AI 토론', highlight: true },
   { path: '/news-monitor', label: 'News', icon: '📰', description: '뉴스 모니터링' },
-  { path: '/analysis', label: 'Analysis', icon: '🔍', description: 'AI 종합 분석' },
-  { path: '/signals', label: 'Signals', icon: '📡', description: '투자 시그널' },
   { path: '/quant-signals', label: 'Quant', icon: '🔬', description: '퀀트 시그널' },
+  { path: '/signals', label: 'Signals', icon: '📡', description: '투자 시그널' },
+  { path: '/analysis', label: 'Analysis', icon: '🔍', description: 'AI 종합 분석' },
   { path: '/portfolio', label: 'Portfolio', icon: '💼', description: '포트폴리오' },
   { path: '/trading', label: 'Trading', icon: '💹', description: '자동매매' },
   { path: '/backtest', label: 'Backtest', icon: '⏱️', description: '전략 검증' },
@@ -152,7 +152,7 @@ function TriggerHistoryDropdown() {
                     <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center text-lg">
                       {trigger.type === 'news_trigger' ? '📰' :
                         trigger.type === 'meeting_started' ? '🏛️' :
-                        trigger.type === 'signal_created' ? '📡' : '✅'}
+                          trigger.type === 'signal_created' ? '📡' : '✅'}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center space-x-2">

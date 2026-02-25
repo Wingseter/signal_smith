@@ -318,6 +318,58 @@ def refresh_stock_universe(self):
         self.retry(exc=e)
 
 
+@celery_app.task(
+    name="app.services.tasks.refresh_account_summary",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=15,
+    time_limit=60,
+    soft_time_limit=45,
+)
+def refresh_account_summary(self):
+    """백그라운드에서 키움 계좌 요약(잔고+보유종목)을 갱신하여 Redis에 캐싱.
+
+    30초 간격으로 Celery beat에서 실행.
+    Dashboard API는 이 캐시를 읽어 즉시 응답한다.
+    """
+    try:
+        result = run_async(_refresh_account_summary_async())
+        return result
+    except Exception as e:
+        logger.error(f"Account summary refresh failed: {e}")
+        self.retry(exc=e)
+
+
+async def _refresh_account_summary_async() -> dict:
+    """키움 API로 balance + holdings 조회 → Redis 캐시 갱신."""
+    from app.core.redis import get_redis
+    from app.services.trading_service import trading_service
+
+    try:
+        balance = await trading_service.get_account_balance()
+        holdings = await trading_service.get_holdings()
+    except Exception as e:
+        logger.warning(f"키움 API 호출 실패 (account summary refresh): {e}")
+        return {"status": "error", "reason": str(e)}
+
+    updated_at = datetime.now().isoformat()
+    result = {
+        "balance": balance,
+        "holdings": holdings,
+        "count": len(holdings),
+        "updated_at": updated_at,
+    }
+
+    try:
+        redis = await get_redis()
+        await redis.set("account:summary", json.dumps(result), ex=90)
+        logger.debug(f"Account summary cached: {len(holdings)} holdings, updated_at={updated_at}")
+    except Exception as e:
+        logger.warning(f"Redis 캐시 저장 실패 (account summary): {e}")
+
+    return {"status": "success", "holdings_count": len(holdings), "updated_at": updated_at}
+
+
 # ── Helper functions ──
 
 

@@ -526,8 +526,13 @@ async def get_account_summary():
 
 
 async def _get_account_summary() -> dict:
-    """계좌 정보 통합 조회 (10초 Redis 캐시)"""
+    """계좌 정보 통합 조회 (캐시 우선 — 백그라운드 태스크가 30초마다 갱신).
+
+    Redis 캐시가 있으면 즉시 반환하고,
+    캐시 미스 시에만 Kiwoom API를 직접 호출 (최초 로딩 / 장애 fallback).
+    """
     import json
+    from datetime import datetime
     from app.core.redis import get_redis
 
     cache_key = "account:summary"
@@ -539,7 +544,7 @@ async def _get_account_summary() -> dict:
     except Exception:
         pass
 
-    # 키움 API 순차 호출 (동시 호출 시 토큰 경쟁 방지)
+    # 캐시 미스: 직접 호출 (fallback)
     balance = await trading_service.get_account_balance()
     holdings = await trading_service.get_holdings()
 
@@ -547,11 +552,12 @@ async def _get_account_summary() -> dict:
         "balance": balance,
         "holdings": holdings,
         "count": len(holdings),
+        "updated_at": datetime.now().isoformat(),
     }
 
     try:
         redis = await get_redis()
-        await redis.set(cache_key, json.dumps(result), ex=10)
+        await redis.set(cache_key, json.dumps(result), ex=90)
     except Exception:
         pass
 

@@ -18,6 +18,7 @@ from .signal_tasks import (  # noqa: F401
     monitor_holdings_sell,
     process_council_queue,
     refresh_stock_universe,
+    refresh_account_summary,
 )
 from .notification_tasks import send_notification, send_daily_report  # noqa: F401
 from .maintenance_tasks import cleanup_old_data  # noqa: F401
