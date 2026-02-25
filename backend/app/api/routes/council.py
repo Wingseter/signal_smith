@@ -11,11 +11,14 @@ from typing import List, Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Query
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from app.services.news import news_trader, news_monitor
 from app.services.council import council_orchestrator, CouncilMeeting, InvestmentSignal
 from app.services.trading_service import trading_service
 from app.core.websocket import BaseConnectionManager
+from app.core.database import async_session_maker
+from app.models.transaction import TradingSignal as TradingSignalModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["AI Council"])
@@ -153,11 +156,54 @@ async def get_meeting_transcript(meeting_id: str):
 
 @router.get("/signals/pending")
 async def get_pending_signals():
-    """대기 중인 시그널"""
-    signals = news_trader.get_pending_signals()
+    """대기 중인 시그널 (DB 기반 — 재시작 후에도 유지)"""
+    # in-memory 시그널 (승인 대기 중인 것)
+    mem_signals = news_trader.get_pending_signals()
+
+    # DB에서 queued/pending 상태이며 미체결인 시그널 조회
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(TradingSignalModel).where(
+                TradingSignalModel.signal_status.in_(["pending", "queued"]),
+                TradingSignalModel.is_executed == False,
+                TradingSignalModel.signal_type.in_(["buy", "sell"]),
+            ).order_by(TradingSignalModel.created_at.desc())
+        )
+        db_signals = result.scalars().all()
+
+    # in-memory 시그널에 없는 DB 시그널만 추가 (중복 방지)
+    mem_db_ids = {getattr(s, "_db_id", None) for s in mem_signals}
+    db_only = [s for s in db_signals if s.id not in mem_db_ids]
+
+    db_formatted = [
+        {
+            "id": str(s.id),
+            "symbol": s.symbol,
+            "company_name": s.company_name or s.symbol,
+            "action": s.signal_type.upper(),
+            "allocation_percent": 0,
+            "suggested_amount": int((s.quantity or 0) * float(s.target_price or 0)),
+            "suggested_quantity": s.quantity or 0,
+            "target_price": float(s.target_price) if s.target_price else None,
+            "stop_loss_price": float(s.stop_loss) if s.stop_loss else None,
+            "confidence": float(s.strength) / 100,
+            "quant_score": s.quant_score or 5,
+            "fundamental_score": s.fundamental_score or 5,
+            "quant_summary": None,
+            "fundamental_summary": None,
+            "consensus_reason": s.reason or "",
+            "status": s.signal_status,
+            "holding_deadline": s.holding_deadline.isoformat() if s.holding_deadline else None,
+            "created_at": s.created_at.isoformat(),
+            "source": "db",
+        }
+        for s in db_only
+    ]
+
+    all_signals = [s.to_dict() for s in mem_signals] + db_formatted
     return {
-        "signals": [s.to_dict() for s in signals],
-        "total": len(signals),
+        "signals": all_signals,
+        "total": len(all_signals),
     }
 
 

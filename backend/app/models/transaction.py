@@ -58,6 +58,7 @@ class TradingSignal(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True)
+    company_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # 종목명
     signal_type: Mapped[str] = mapped_column(String(10))  # buy, sell, hold
     strength: Mapped[Decimal] = mapped_column(Numeric(5, 2))  # 0 to 100
     source_agent: Mapped[str] = mapped_column(String(50))
@@ -68,6 +69,8 @@ class TradingSignal(Base):
     signal_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # pending/queued/auto_executed
     trigger_details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 퀀트 트리거 상세
     holding_deadline: Mapped[Optional[date]] = mapped_column(Date, nullable=True)  # 보유 기한 (초과 시 매도)
+    quant_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # GPT 퀀트 점수 (1-10)
+    fundamental_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Claude 펀더멘털 점수 (1-10)
     is_executed: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

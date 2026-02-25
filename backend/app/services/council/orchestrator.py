@@ -734,6 +734,7 @@ class CouncilOrchestrator:
             is_executed = signal.status == SignalStatus.AUTO_EXECUTED
             db_id = await trading_service.create_trading_signal(
                 symbol=signal.symbol,
+                company_name=signal.company_name,
                 signal_type=signal.action.lower(),
                 strength=signal.confidence * 100,
                 source_agent=trigger_source,
@@ -744,6 +745,8 @@ class CouncilOrchestrator:
                 signal_status=signal.status.value,
                 trigger_details=trigger_details,
                 holding_deadline=holding_deadline,
+                quant_score=signal.quant_score,
+                fundamental_score=signal.fundamental_score,
                 is_executed=is_executed,
             )
             signal._db_id = db_id  # DB ID 참조 저장

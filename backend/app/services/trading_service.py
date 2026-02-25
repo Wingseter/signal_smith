@@ -287,12 +287,16 @@ class TradingService:
         signal_status: Optional[str] = None,
         trigger_details: Optional[Dict[str, Any]] = None,
         holding_deadline: Optional[date] = None,
+        company_name: Optional[str] = None,
+        quant_score: Optional[int] = None,
+        fundamental_score: Optional[int] = None,
         is_executed: bool = False,
     ) -> int:
         """AI 트레이딩 시그널 생성"""
         async with async_session_maker() as session:
             signal = TradingSignal(
                 symbol=symbol,
+                company_name=company_name,
                 signal_type=signal_type,
                 strength=Decimal(str(strength)),
                 source_agent=source_agent,
@@ -303,6 +307,8 @@ class TradingService:
                 signal_status=signal_status,
                 trigger_details=trigger_details,
                 holding_deadline=holding_deadline,
+                quant_score=quant_score,
+                fundamental_score=fundamental_score,
                 is_executed=is_executed,
             )
             session.add(signal)
