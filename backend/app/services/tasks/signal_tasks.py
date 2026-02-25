@@ -53,20 +53,19 @@ def monitor_signals(self):
             if not pending_signals:
                 return {"status": "success", "message": "no_pending_signals"}
 
-            from app.services.kiwoom.rest_client import KiwoomRestClient
+            from app.services.kiwoom.rest_client import kiwoom_client
             from .notification_tasks import send_notification
 
-            client = KiwoomRestClient()
             actions = []
 
             for signal in pending_signals:
                 try:
-                    current_price = run_async(client.get_current_price(signal.symbol))
+                    stock_price = run_async(kiwoom_client.get_stock_price(signal.symbol))
 
-                    if not current_price:
+                    if not stock_price:
                         continue
 
-                    price = current_price.get("close", 0)
+                    price = stock_price.current_price
 
                     if signal.stop_loss and price <= signal.stop_loss:
                         actions.append({
