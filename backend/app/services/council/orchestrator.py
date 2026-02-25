@@ -406,6 +406,15 @@ class CouncilOrchestrator:
             fundamental_score=fundamental_score,
         )
 
+        # quantity=0이면 체결 불가 → HOLD 전환 (1주 가격 > 투자금액)
+        if action in ("BUY", "SELL") and signal.suggested_quantity <= 0:
+            logger.info(
+                f"HOLD 전환: {symbol} quantity=0 "
+                f"(투자금액 {suggested_amount:,}원 < 1주 가격 {current_price:,}원)"
+            )
+            signal.action = "HOLD"
+            action = "HOLD"
+
         # 자동 체결 여부 결정
         if self.auto_execute and confidence >= self.min_confidence:
             can_trade, trade_reason = trading_hours.can_execute_order()

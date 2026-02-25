@@ -48,12 +48,7 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "default"},
     },
 
-    # AI 분석 실행 - 15분마다
-    "run-ai-analysis": {
-        "task": "app.services.tasks.run_ai_analysis",
-        "schedule": 900.0,  # Every 15 minutes
-        "options": {"queue": "default"},
-    },
+    # run-ai-analysis: 비활성화 (council 시스템이 대체, coordinator 레거시)
 
     # 신호 모니터링 - 30초마다
     "monitor-signals": {
