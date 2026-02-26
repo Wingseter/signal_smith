@@ -2,8 +2,10 @@
 시그널 스캐너
 
 종목 스캔 → 지표 계산 → 트리거 평가 → 시그널 생성
+결과는 Redis에 저장되어 Celery worker와 FastAPI 간 공유
 """
 
+import json
 import logging
 import asyncio
 from datetime import datetime
@@ -14,6 +16,19 @@ from .indicators import quant_calculator
 from .triggers import trigger_evaluator
 
 logger = logging.getLogger(__name__)
+
+# Redis 키 상수
+REDIS_KEY_RESULTS = "quant:signals:results"      # Hash: symbol → JSON
+REDIS_KEY_SCORES = "quant:signals:scores"         # Sorted Set: symbol → score
+REDIS_KEY_LAST_SCAN = "quant:signals:last_scan_at"  # String: ISO timestamp
+REDIS_TTL = 24 * 3600  # 24시간
+
+
+def _get_sync_redis():
+    """동기 Redis 클라이언트 (Celery worker용 폴백)."""
+    import redis as sync_redis
+    from app.config import settings
+    return sync_redis.from_url(settings.redis_url, decode_responses=True)
 
 
 class SignalScanner:
@@ -97,8 +112,22 @@ class SignalScanner:
             bearish = sum(1 for t in triggers if t.signal == TriggerSignal.BEARISH)
             neutral = sum(1 for t in triggers if t.signal == TriggerSignal.NEUTRAL)
 
+            # 종목명 조회 (DB)
+            company_name = ""
+            try:
+                from sqlalchemy import select as sa_select
+                from app.models.stock import Stock
+                from app.core.database import get_sync_db
+                with get_sync_db() as db:
+                    row = db.execute(sa_select(Stock.name).where(Stock.symbol == symbol)).first()
+                    if row:
+                        company_name = row[0] or ""
+            except Exception:
+                pass
+
             result = SignalResult(
                 symbol=symbol,
+                company_name=company_name,
                 indicators=indicators,
                 triggers=triggers,
                 composite_score=composite_score,
@@ -108,7 +137,7 @@ class SignalScanner:
                 action=action,
             )
 
-            # 결과 저장
+            # 결과 저장 (인메모리 + Redis)
             self._store_result(result)
 
             logger.info(
@@ -182,6 +211,13 @@ class SignalScanner:
         self._is_scanning = False
         self._last_scan_at = datetime.now()
 
+        # Redis에 마지막 스캔 시각 기록
+        try:
+            r = _get_sync_redis()
+            r.set(REDIS_KEY_LAST_SCAN, self._last_scan_at.isoformat(), ex=REDIS_TTL)
+        except Exception as e:
+            logger.warning(f"Redis last_scan_at 저장 실패: {e}")
+
         # 점수순 정렬
         results.sort(key=lambda r: r.composite_score, reverse=True)
 
@@ -196,7 +232,7 @@ class SignalScanner:
         return results
 
     async def get_top_signals(self, limit: int = 20) -> List[SignalResult]:
-        """상위 시그널 종목 반환
+        """상위 시그널 종목 반환 (Redis 우선)
 
         Args:
             limit: 반환할 최대 종목 수
@@ -204,6 +240,25 @@ class SignalScanner:
         Returns:
             점수 상위 시그널 결과
         """
+        try:
+            r = _get_sync_redis()
+            # Sorted Set에서 점수 내림차순 상위 N개 symbol 조회
+            top_symbols = r.zrevrange(REDIS_KEY_SCORES, 0, limit - 1)
+            if top_symbols:
+                pipeline = r.pipeline()
+                for sym in top_symbols:
+                    pipeline.hget(REDIS_KEY_RESULTS, sym)
+                raw_list = pipeline.execute()
+
+                results = []
+                for raw in raw_list:
+                    if raw:
+                        results.append(self._deserialize_result(raw))
+                return results
+        except Exception as e:
+            logger.warning(f"Redis top signals 조회 실패, 인메모리 폴백: {e}")
+
+        # 인메모리 폴백
         sorted_results = sorted(
             self._results, key=lambda r: r.composite_score, reverse=True
         )
@@ -212,26 +267,121 @@ class SignalScanner:
     # ============ 상태 ============
 
     def get_status(self) -> dict:
-        """스캐너 상태"""
+        """스캐너 상태 (Redis 포함)"""
+        total_results = len(self._results)
+        last_scan = self._last_scan_at.isoformat() if self._last_scan_at else None
+
+        # Redis에서 보강
+        try:
+            r = _get_sync_redis()
+            redis_count = r.hlen(REDIS_KEY_RESULTS)
+            if redis_count > total_results:
+                total_results = redis_count
+            redis_last = r.get(REDIS_KEY_LAST_SCAN)
+            if redis_last:
+                last_scan = redis_last
+        except Exception:
+            pass
+
         return {
             "is_scanning": self._is_scanning,
-            "last_scan_at": self._last_scan_at.isoformat() if self._last_scan_at else None,
-            "total_results": len(self._results),
+            "last_scan_at": last_scan,
+            "total_results": total_results,
         }
 
     def get_recent_results(self, limit: int = 50) -> List[SignalResult]:
-        """최근 스캔 결과"""
+        """최근 스캔 결과 (Redis 우선)"""
+        try:
+            r = _get_sync_redis()
+            # Sorted Set에서 점수 내림차순으로 전체 조회 (최근 결과를 점수순으로)
+            all_symbols = r.zrevrange(REDIS_KEY_SCORES, 0, limit - 1)
+            if all_symbols:
+                pipeline = r.pipeline()
+                for sym in all_symbols:
+                    pipeline.hget(REDIS_KEY_RESULTS, sym)
+                raw_list = pipeline.execute()
+
+                results = []
+                for raw in raw_list:
+                    if raw:
+                        results.append(self._deserialize_result(raw))
+
+                if results:
+                    return results
+        except Exception as e:
+            logger.warning(f"Redis 결과 조회 실패, 인메모리 폴백: {e}")
+
+        # 인메모리 폴백
         return self._results[-limit:]
 
     def _store_result(self, result: SignalResult):
-        """결과 저장 (최대 500개 유지)"""
-        # 같은 종목 기존 결과 제거
+        """결과 저장 (인메모리 + Redis)"""
+        # 인메모리 저장 (기존 방식 유지)
         self._results = [r for r in self._results if r.symbol != result.symbol]
         self._results.append(result)
-
-        # 최대 보관 수 제한
         if len(self._results) > 500:
             self._results = self._results[-500:]
+
+        # Redis 저장
+        try:
+            r = _get_sync_redis()
+            data = json.dumps(result.to_dict(), ensure_ascii=False)
+
+            pipeline = r.pipeline()
+            pipeline.hset(REDIS_KEY_RESULTS, result.symbol, data)
+            pipeline.zadd(REDIS_KEY_SCORES, {result.symbol: result.composite_score})
+            pipeline.expire(REDIS_KEY_RESULTS, REDIS_TTL)
+            pipeline.expire(REDIS_KEY_SCORES, REDIS_TTL)
+            pipeline.execute()
+        except Exception as e:
+            logger.warning(f"Redis 시그널 저장 실패 ({result.symbol}): {e}")
+
+    @staticmethod
+    def _deserialize_result(raw_json: str) -> SignalResult:
+        """Redis JSON → SignalResult (UI 표시용 최소 복원)"""
+        from .models import SignalAction, TriggerResult as TriggerResultModel
+        from .models import TriggerSignal, SignalStrength
+
+        data = json.loads(raw_json) if isinstance(raw_json, str) else raw_json
+
+        triggers = []
+        for t in data.get("triggers", []):
+            triggers.append(TriggerResultModel(
+                trigger_id=t.get("trigger_id", ""),
+                name=t.get("name", ""),
+                signal=TriggerSignal(t.get("signal", "neutral")),
+                strength=SignalStrength(t.get("strength", "none")),
+                score=t.get("score", 0),
+                details=t.get("details", ""),
+                values=t.get("values", {}),
+            ))
+
+        action_str = data.get("action", "hold")
+        try:
+            action = SignalAction(action_str)
+        except ValueError:
+            action = SignalAction.HOLD
+
+        scanned_at_str = data.get("scanned_at")
+        scanned_at = (
+            datetime.fromisoformat(scanned_at_str)
+            if scanned_at_str
+            else datetime.now()
+        )
+
+        return SignalResult(
+            id=data.get("id", ""),
+            symbol=data.get("symbol", ""),
+            company_name=data.get("company_name", ""),
+            indicators=None,  # 지표 원본은 Redis에서 복원 불필요 (UI 미사용)
+            triggers=triggers,
+            composite_score=data.get("composite_score", 0),
+            bullish_count=data.get("bullish_count", 0),
+            bearish_count=data.get("bearish_count", 0),
+            neutral_count=data.get("neutral_count", 0),
+            action=action,
+            scanned_at=scanned_at,
+        )
 
 
 # 싱글톤 인스턴스

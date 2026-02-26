@@ -71,6 +71,8 @@ class TradingSignal(Base):
     holding_deadline: Mapped[Optional[date]] = mapped_column(Date, nullable=True)  # 보유 기한 (초과 시 매도)
     quant_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # GPT 퀀트 점수 (1-10)
     fundamental_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # Claude 펀더멘털 점수 (1-10)
+    allocation_percent: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)  # 투자 비율 (%)
+    suggested_amount: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 제안 금액 (원)
     is_executed: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

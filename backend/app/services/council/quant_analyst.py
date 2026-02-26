@@ -71,6 +71,43 @@ class QuantAnalyst:
     "reply_to_other": "다른 분석가에게 하고 싶은 말 (선택)"
 }}"""
 
+    # 퀀트 룰 기반 트리거 결과를 포함한 분석 프롬프트
+    ANALYSIS_PROMPT_WITH_QUANT = """다음 종목에 대한 퀀트/기술적 분석을 수행해주세요.
+
+[종목 정보]
+종목코드: {symbol}
+종목명: {company_name}
+
+[룰 기반 퀀트 시그널]
+종합 점수: {composite_score}/100
+매수 신호: {bullish_count}개 | 매도 신호: {bearish_count}개
+
+활성화된 트리거 목록:
+{trigger_list}
+
+[실제 기술적 지표 데이터]
+{technical_data}
+
+[이전 대화]
+{conversation}
+
+[요청]
+{request}
+
+[응답 형식]
+다음 JSON 형식으로 응답해주세요:
+{{
+    "analysis": "기술적 분석 내용 (2-3문장, 퀀트 트리거 결과와 실제 지표 데이터 기반)",
+    "score": 1-10 사이 점수,
+    "suggested_percent": 제안 투자 비율 (0-100),
+    "reasoning": "투자 비율 산정 근거 (트리거 신호 및 실제 지표값 인용)",
+    "risk_factors": ["리스크 요소 1", "리스크 요소 2"],
+    "entry_price": 권장 진입가 (정수),
+    "stop_loss": 손절가 (정수),
+    "target_price": 목표가 (정수),
+    "reply_to_other": "다른 분석가에게 하고 싶은 말 (선택)"
+}}"""
+
     # 기술적 데이터 없이 뉴스만으로 분석할 때 사용
     ANALYSIS_PROMPT_NO_DATA = """다음 종목에 대한 퀀트/기술적 분석을 수행해주세요.
 
@@ -138,6 +175,7 @@ class QuantAnalyst:
         news_title: str,
         previous_messages: list[CouncilMessage],
         technical_data: Optional[TechnicalAnalysisResult] = None,
+        quant_trigger_data: Optional[dict] = None,
         request: str = "기술적 분석을 수행하고 투자 비율을 제안해주세요."
     ) -> CouncilMessage:
         """퀀트 분석 수행"""
@@ -145,8 +183,38 @@ class QuantAnalyst:
 
         conversation = self._build_conversation(previous_messages)
 
-        # 기술적 데이터 유무에 따라 프롬프트 선택
-        if technical_data and technical_data.current_price > 0:
+        # 퀀트 트리거 데이터가 있는 경우 우선 사용
+        if quant_trigger_data and technical_data and technical_data.current_price > 0:
+            trigger_lines = []
+            for t in quant_trigger_data.get("triggers", []):
+                signal_label = "📈 매수" if t.get("signal") == "bullish" else "📉 매도"
+                details = t.get("details") or {}
+                if isinstance(details, dict):
+                    details_str = ", ".join(f"{k}={v}" for k, v in details.items())
+                else:
+                    details_str = str(details)
+                trigger_lines.append(
+                    f"  - [{signal_label}] {t.get('name', t.get('id', '알 수 없음'))}: 점수 {t.get('score', 0)}"
+                    + (f" ({details_str})" if details_str else "")
+                )
+            trigger_list = "\n".join(trigger_lines) if trigger_lines else "  (없음)"
+            prompt = self.ANALYSIS_PROMPT_WITH_QUANT.format(
+                symbol=symbol,
+                company_name=company_name,
+                composite_score=quant_trigger_data.get("composite_score", 0),
+                bullish_count=quant_trigger_data.get("bullish_count", 0),
+                bearish_count=quant_trigger_data.get("bearish_count", 0),
+                trigger_list=trigger_list,
+                technical_data=technical_data.to_prompt_text(),
+                conversation=conversation,
+                request=request,
+            )
+            logger.info(
+                f"[퀀트분석] {symbol} - 룰 기반 트리거 포함 분석 "
+                f"(점수: {quant_trigger_data.get('composite_score', 0)}/100, "
+                f"현재가: {technical_data.current_price:,}원)"
+            )
+        elif technical_data and technical_data.current_price > 0:
             prompt = self.ANALYSIS_PROMPT.format(
                 symbol=symbol,
                 company_name=company_name,
@@ -250,6 +318,7 @@ class QuantAnalyst:
         previous_messages: list[CouncilMessage],
         other_analysis: str,
         technical_data: Optional[TechnicalAnalysisResult] = None,
+        quant_trigger_data: Optional[dict] = None,
     ) -> CouncilMessage:
         """다른 분석가의 의견에 응답"""
         request = f"""펀더멘털 분석가의 의견을 검토하고 응답해주세요:
@@ -265,6 +334,7 @@ class QuantAnalyst:
             news_title=news_title,
             previous_messages=previous_messages,
             technical_data=technical_data,
+            quant_trigger_data=quant_trigger_data,
             request=request,
         )
 

@@ -147,7 +147,7 @@ export function RealizedPnlPanel() {
                       </div>
                     </td>
                     <td className="text-right py-2 px-2 text-gray-700">{item.quantity.toLocaleString()}</td>
-                    <td className="text-right py-2 px-2 text-gray-700">{item.buy_price.toLocaleString()}</td>
+                    <td className="text-right py-2 px-2 text-gray-700">{item.buy_price > 0 ? item.buy_price.toLocaleString() : '-'}</td>
                     <td className="text-right py-2 px-2 text-gray-700">{item.sell_price.toLocaleString()}</td>
                     <td className={`text-right py-2 px-2 font-medium ${
                       item.profit_loss >= 0 ? 'text-red-600' : 'text-blue-600'

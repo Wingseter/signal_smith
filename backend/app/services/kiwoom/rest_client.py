@@ -828,15 +828,28 @@ class KiwoomRestClient(KiwoomBaseClient):
                     if not stk_cd:
                         continue
 
+                    qty = parse_int(item.get("cntr_qty"))
+                    buy_uv = parse_int(item.get("buy_uv"))
+                    sell_price = parse_int(item.get("cntr_pric"))
+                    profit_loss = parse_int(item.get("tdy_sel_pl"))
+                    profit_rate = parse_float(item.get("pl_rt"))
+
+                    # buy_uv=0이지만 체결가·손익률이 있는 경우 역산
+                    # buy_price = sell_price / (1 + profit_rate / 100)
+                    if buy_uv == 0 and sell_price > 0 and profit_rate != 0:
+                        buy_uv = round(sell_price / (1 + profit_rate / 100))
+                        if profit_loss == 0 and qty > 0:
+                            profit_loss = round((sell_price - buy_uv) * qty)
+
                     all_items.append(RealizedPnlItem(
                         date=item.get("dt", ""),
                         symbol=stk_cd,
                         name=item.get("stk_nm", "").strip(),
-                        quantity=parse_int(item.get("cntr_qty")),
-                        buy_price=parse_int(item.get("buy_uv")),
-                        sell_price=parse_int(item.get("cntr_pric")),
-                        profit_loss=parse_int(item.get("tdy_sel_pl")),
-                        profit_rate=parse_float(item.get("pl_rt")),
+                        quantity=qty,
+                        buy_price=buy_uv,
+                        sell_price=sell_price,
+                        profit_loss=profit_loss,
+                        profit_rate=profit_rate,
                         commission=parse_int(item.get("tdy_trde_cmsn")),
                         tax=parse_int(item.get("tdy_trde_tax")),
                     ))

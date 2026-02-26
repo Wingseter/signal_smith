@@ -171,10 +171,31 @@ class CouncilOrchestrator:
         dart_status = "📋 DART 재무제표" if financial_data else "⚠️ 재무제표 없음"
         data_status = f"{chart_status} | {dart_status}"
 
-        opening_msg = CouncilMessage(
-            role=AnalystRole.GEMINI_JUDGE,
-            speaker="Gemini 뉴스 판단",
-            content=f"""🔔 **AI 투자 회의 소집**
+        if trigger_source == "quant" and quant_triggers:
+            bullish = quant_triggers.get("bullish_count", 0)
+            bearish = quant_triggers.get("bearish_count", 0)
+            score = quant_triggers.get("composite_score", 0)
+            trigger_names = [t.get("name", t.get("id", "")) for t in quant_triggers.get("triggers", []) if t.get("signal") == "bullish"]
+            trigger_summary = ", ".join(trigger_names[:5]) if trigger_names else "복수 지표"
+            opening_content = f"""🔔 **AI 투자 회의 소집**
+
+트리거: 퀀트 룰 기반 매수 신호
+종합 점수: {score}/100 (매수 {bullish}개 | 매도 {bearish}개)
+주요 신호: {trigger_summary}
+
+{company_name}({symbol})에 대해 룰 기반 퀀트 분석이 매수 신호를 발생시켰습니다.
+AI 회의를 통해 투자 여부를 최종 결정합니다.
+
+{data_status}"""
+            opening_data = {
+                "news_score": news_score,
+                "trigger": "quant",
+                "composite_score": score,
+                "has_chart_data": technical_data is not None,
+                "has_financial_data": financial_data is not None,
+            }
+        else:
+            opening_content = f"""🔔 **AI 투자 회의 소집**
 
 트리거 뉴스: "{news_title}"
 뉴스 점수: {news_score}/10
@@ -182,13 +203,19 @@ class CouncilOrchestrator:
 이 뉴스가 {company_name}({symbol})의 주가에 긍정적 영향을 줄 것으로 판단됩니다.
 투자 회의를 시작합니다.
 
-{data_status}""",
-            data={
+{data_status}"""
+            opening_data = {
                 "news_score": news_score,
                 "trigger": "news",
                 "has_chart_data": technical_data is not None,
                 "has_financial_data": financial_data is not None,
-            },
+            }
+
+        opening_msg = CouncilMessage(
+            role=AnalystRole.GEMINI_JUDGE,
+            speaker="Gemini 뉴스 판단",
+            content=opening_content,
+            data=opening_data,
         )
         meeting.add_message(opening_msg)
         await self._notify_meeting_update(meeting)
@@ -196,7 +223,7 @@ class CouncilOrchestrator:
         # 2. 라운드 1: 초기 분석
         meeting.current_round = 1
 
-        # GPT 퀀트 분석 (실제 차트 데이터 전달)
+        # GPT 퀀트 분석 (실제 차트 데이터 전달, 퀀트 트리거 시 룰 기반 결과도 포함)
         try:
             quant_msg = await asyncio.wait_for(
                 quant_analyst.analyze(
@@ -205,6 +232,7 @@ class CouncilOrchestrator:
                     news_title=news_title,
                     previous_messages=meeting.messages,
                     technical_data=technical_data,  # 실제 차트 데이터 전달
+                    quant_trigger_data=quant_triggers if trigger_source == "quant" else None,
                 ),
                 timeout=60.0  # 타임아웃 15초 강제
             )
@@ -217,7 +245,7 @@ class CouncilOrchestrator:
             logger.error(f"퀀트 분석가 API 호출 실패 또는 타임아웃: {e}")
             # Fallback 로직: 기본값 할당 및 에러 메시지 생성
             quant_msg = CouncilMessage(
-                role=AnalystRole.QUANT,
+                role=AnalystRole.GPT_QUANT,
                 speaker="시스템",
                 content="[시스템 경고] 퀀트 분석가 API 응답 지연으로 기본 판단을 적용합니다. 차트 및 기술적 지표 단독 결정에 유의하세요.",
                 data={"suggested_percent": 0, "score": 5}
@@ -271,6 +299,7 @@ class CouncilOrchestrator:
                     previous_messages=meeting.messages,
                     other_analysis=fundamental_msg.content,
                     technical_data=technical_data,  # 실제 차트 데이터 전달
+                    quant_trigger_data=quant_triggers if trigger_source == "quant" else None,
                 ),
                 timeout=60.0  # 타임아웃 강제
             )
@@ -283,7 +312,7 @@ class CouncilOrchestrator:
         except (asyncio.TimeoutError, Exception) as e:
             logger.error(f"퀀트 응답 API 호출 실패 또는 타임아웃: {e}")
             quant_response = CouncilMessage(
-                role=AnalystRole.QUANT,
+                role=AnalystRole.GPT_QUANT,
                 speaker="시스템",
                 content="[시스템 경고] 퀀트 분석가 상호 검토 응답 지연으로 기존 의견을 유지합니다.",
                 data={"suggested_percent": quant_percent, "score": quant_score}
@@ -357,7 +386,7 @@ class CouncilOrchestrator:
         holding_days = 7  # 기본값
         if consensus_msg.data:
             raw_days = consensus_msg.data.get("holding_days", 7)
-            holding_days = max(5, min(21, int(raw_days)))
+            holding_days = min(10, int(raw_days))
         holding_deadline = date.today() + timedelta(days=holding_days)
 
         # 5. 시그널 생성
@@ -382,6 +411,7 @@ class CouncilOrchestrator:
             quant_score=quant_score,
             fundamental_score=fundamental_score,
             news_score=news_score,
+            trigger_source=trigger_source,
         )
 
         # SELL 시그널인 경우 보유 여부 확인 — 보유하지 않은 종목은 HOLD로 변경
@@ -682,26 +712,30 @@ class CouncilOrchestrator:
         quant_score: int,
         fundamental_score: int,
         news_score: int,
+        trigger_source: str = "news",
     ) -> str:
         """
         투자 액션 결정 (BUY/SELL/HOLD)
 
         SELL 조건:
-        1. 뉴스 점수가 3 이하 (부정적 뉴스)
+        1. 뉴스 점수가 3 이하 (부정적 뉴스) — 뉴스 트리거만
         2. 퀀트 + 펀더멘털 평균 점수 4 이하
         3. 투자 비율이 음수로 제안됨 (AI가 매도 권장)
 
-        BUY 조건:
-        1. 뉴스 점수 7 이상
-        2. 퀀트 + 펀더멘털 평균 점수 6 이상
-        3. 투자 비율 10% 이상
+        BUY 조건 (뉴스 트리거):
+        1. 비율 10%+ AND 평균 점수 6+
+        2. 뉴스 점수 8+ AND 평균 점수 5+
+
+        BUY 조건 (퀀트 트리거 — 뉴스 점수 무시):
+        1. 비율 10%+ AND 평균 점수 5.5+
+        2. 비율 15%+ AND 평균 점수 5+
 
         HOLD: 그 외
         """
         avg_score = (quant_score + fundamental_score) / 2
 
         # SELL 조건
-        if news_score <= 3:
+        if trigger_source == "news" and news_score <= 3:
             logger.info(f"SELL 결정: 부정적 뉴스 (점수: {news_score})")
             return "SELL"
 
@@ -713,7 +747,16 @@ class CouncilOrchestrator:
             logger.info(f"SELL 결정: AI 매도 권장 (비율: {final_percent}%)")
             return "SELL"
 
-        # BUY 조건
+        # 퀀트 트리거 BUY 조건 (뉴스 점수 무시, 이미 룰 기반 스캔 통과)
+        if trigger_source == "quant":
+            if final_percent >= 10 and avg_score >= 5.5:
+                logger.info(f"BUY 결정 [퀀트]: 분석 긍정 (비율: {final_percent}%, 평균: {avg_score:.1f})")
+                return "BUY"
+            if final_percent >= 15 and avg_score >= 5:
+                logger.info(f"BUY 결정 [퀀트]: 높은 비율 (비율: {final_percent}%, 평균: {avg_score:.1f})")
+                return "BUY"
+
+        # 뉴스 트리거 BUY 조건
         if final_percent >= 10 and avg_score >= 6:
             logger.info(f"BUY 결정: 긍정적 분석 (비율: {final_percent}%, 평균: {avg_score:.1f})")
             return "BUY"
@@ -723,7 +766,7 @@ class CouncilOrchestrator:
             return "BUY"
 
         # HOLD
-        logger.info(f"HOLD 결정: 조건 미충족 (비율: {final_percent}%, 평균: {avg_score:.1f})")
+        logger.info(f"HOLD 결정: 조건 미충족 (비율: {final_percent}%, 평균: {avg_score:.1f}, 트리거: {trigger_source})")
         return "HOLD"
 
     async def _persist_signal_to_db(
@@ -751,6 +794,8 @@ class CouncilOrchestrator:
                 holding_deadline=holding_deadline,
                 quant_score=signal.quant_score,
                 fundamental_score=signal.fundamental_score,
+                allocation_percent=signal.allocation_percent,
+                suggested_amount=signal.suggested_amount,
                 is_executed=is_executed,
             )
             signal._db_id = db_id  # DB ID 참조 저장
@@ -921,7 +966,7 @@ class CouncilOrchestrator:
         except (asyncio.TimeoutError, Exception) as e:
             logger.error(f"매도 검토 중 퀀트 분석가 API 호출 실패 또는 타임아웃: {e}")
             quant_msg = CouncilMessage(
-                role=AnalystRole.QUANT,
+                role=AnalystRole.GPT_QUANT,
                 speaker="시스템",
                 content=f"[시스템 경고] 분석 지연 발생. 수익률 {profit_loss:+.1f}% 기반 기계적 매도를 우선 고려합니다.",
                 data={"suggested_percent": 30 if profit_loss >= 0 else 100, "score": 5}
@@ -1124,17 +1169,22 @@ class CouncilOrchestrator:
 
                 confidence = s["strength"] / 100.0
 
+                target_price = int(s["target_price"]) if s.get("target_price") else None
+                suggested_amount = s.get("suggested_amount") or (quantity * target_price if target_price else 0)
                 signal = InvestmentSignal(
                     id=f"r{s['id']}",  # 복원된 시그널 구분용 prefix
                     symbol=s["symbol"],
-                    company_name="",
+                    company_name=s.get("company_name", ""),
                     action=action,
                     suggested_quantity=quantity,
-                    suggested_amount=0,
-                    target_price=int(s["target_price"]) if s.get("target_price") else None,
+                    suggested_amount=suggested_amount,
+                    allocation_percent=s.get("allocation_percent", 0.0),
+                    target_price=target_price,
                     stop_loss_price=int(s["stop_loss"]) if s.get("stop_loss") else None,
                     consensus_reason=s.get("reason", ""),
                     confidence=confidence,
+                    quant_score=s.get("quant_score", 0),
+                    fundamental_score=s.get("fundamental_score", 0),
                 )
                 signal._db_id = s["id"]
 

@@ -290,6 +290,8 @@ class TradingService:
         company_name: Optional[str] = None,
         quant_score: Optional[int] = None,
         fundamental_score: Optional[int] = None,
+        allocation_percent: Optional[float] = None,
+        suggested_amount: Optional[int] = None,
         is_executed: bool = False,
     ) -> int:
         """AI 트레이딩 시그널 생성"""
@@ -309,6 +311,8 @@ class TradingService:
                 holding_deadline=holding_deadline,
                 quant_score=quant_score,
                 fundamental_score=fundamental_score,
+                allocation_percent=allocation_percent,
+                suggested_amount=suggested_amount,
                 is_executed=is_executed,
             )
             session.add(signal)
@@ -375,6 +379,7 @@ class TradingService:
                 {
                     "id": s.id,
                     "symbol": s.symbol,
+                    "company_name": s.company_name or "",
                     "signal_type": s.signal_type,
                     "strength": float(s.strength),
                     "source_agent": s.source_agent,
@@ -383,6 +388,10 @@ class TradingService:
                     "stop_loss": float(s.stop_loss) if s.stop_loss else None,
                     "quantity": s.quantity,
                     "signal_status": s.signal_status,
+                    "quant_score": s.quant_score or 0,
+                    "fundamental_score": s.fundamental_score or 0,
+                    "allocation_percent": float(s.allocation_percent) if s.allocation_percent else 0.0,
+                    "suggested_amount": s.suggested_amount or 0,
                     "created_at": s.created_at.isoformat(),
                 }
                 for s in signals

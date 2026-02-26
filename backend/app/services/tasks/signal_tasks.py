@@ -694,7 +694,7 @@ async def _check_buy_signals_for_council(results) -> int:
         buy_results = [
             r for r in results
             if r.action in (SignalAction.STRONG_BUY, SignalAction.BUY)
-            and r.composite_score >= 75
+            and r.composite_score >= 65
         ][:3]  # 스캔당 최대 3건
 
         if not buy_results:

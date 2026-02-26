@@ -84,24 +84,24 @@ export function SignalCard({
           <div>
             <div className="flex justify-between items-center mb-1">
               <span className="text-xs text-green-600 font-medium">📊 퀀트 분석 (GPT)</span>
-              <span className="text-xs text-gray-500">{signal.quant_score}/100</span>
+              <span className="text-xs text-gray-500">{signal.quant_score}/10</span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
               <div
                 className="bg-gradient-to-r from-green-400 to-green-600 h-2 rounded-full transition-all"
-                style={{ width: `${signal.quant_score}%` }}
+                style={{ width: `${signal.quant_score * 10}%` }}
               />
             </div>
           </div>
           <div>
             <div className="flex justify-between items-center mb-1">
               <span className="text-xs text-purple-600 font-medium">📈 펀더멘털 분석 (Claude)</span>
-              <span className="text-xs text-gray-500">{signal.fundamental_score}/100</span>
+              <span className="text-xs text-gray-500">{signal.fundamental_score}/10</span>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-2">
               <div
                 className="bg-gradient-to-r from-purple-400 to-purple-600 h-2 rounded-full transition-all"
-                style={{ width: `${signal.fundamental_score}%` }}
+                style={{ width: `${signal.fundamental_score * 10}%` }}
               />
             </div>
           </div>
