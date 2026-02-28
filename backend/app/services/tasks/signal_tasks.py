@@ -95,6 +95,7 @@ def monitor_signals(self):
 
                     elif signal.created_at < datetime.utcnow() - timedelta(hours=24):
                         signal.is_executed = True
+                        signal.signal_status = "expired"
                         actions.append({
                             "signal_id": signal.id,
                             "action": "expired",
@@ -586,6 +587,17 @@ async def _process_council_queue_from_db() -> dict:
 
     for signal in queued_signals:
         try:
+            # Lock row to prevent duplicate execution from in-memory + DB queue race
+            with get_sync_db() as db:
+                db_check = db.execute(
+                    select(TradingSignalModel)
+                    .where(TradingSignalModel.id == signal.id)
+                    .with_for_update()
+                ).scalar_one_or_none()
+                if not db_check or db_check.is_executed:
+                    logger.info(f"시그널 이미 체결됨, 스킵: {signal.symbol} (id={signal.id})")
+                    continue
+
             side = OrderSide.BUY if signal.signal_type == "buy" else OrderSide.SELL
             order_result = await kiwoom_client.place_order(
                 symbol=signal.symbol,
@@ -601,7 +613,8 @@ async def _process_council_queue_from_db() -> dict:
                 ).scalar_one_or_none()
                 if db_signal:
                     if order_result.status == "submitted":
-                        db_signal.signal_status = "auto_executed"
+                        from app.services.council.models import SignalStatus
+                        db_signal.signal_status = SignalStatus.AUTO_EXECUTED.value
                         db_signal.is_executed = True
                         executed.append(signal.symbol)
                         logger.info(

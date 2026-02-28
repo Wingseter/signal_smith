@@ -89,11 +89,21 @@ class TradingHoursChecker:
 
     def __init__(self):
         self._holidays = self.HOLIDAYS_2025 | self.HOLIDAYS_2026
+        self._last_covered_year = 2026
+        current_year = get_kst_now().year
+        if current_year > self._last_covered_year:
+            logger.warning(
+                "⚠️ TRADING CALENDAR OUT OF DATE: %d년 휴일 데이터 없음. "
+                "trading_hours.py에 HOLIDAYS_%d를 추가하세요.",
+                current_year, current_year,
+            )
 
     def is_holiday(self, dt: Optional[datetime] = None) -> bool:
         """공휴일 여부 확인"""
         if dt is None:
             dt = get_kst_now()
+        if dt.year > self._last_covered_year:
+            return False  # 데이터 없으면 거래일로 간주 (경고는 __init__에서)
         return dt.date() in self._holidays
 
     def is_weekend(self, dt: Optional[datetime] = None) -> bool:

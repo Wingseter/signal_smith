@@ -39,8 +39,7 @@ class ConnectionManager:
     def disconnect(self, websocket: WebSocket, channel: str = "default"):
         if channel in self.active_connections:
             self.active_connections[channel].discard(websocket)
-        if websocket in self.symbol_subscriptions:
-            del self.symbol_subscriptions[websocket]
+        self.symbol_subscriptions.pop(websocket, None)
 
     async def send_personal_message(self, message: dict, websocket: WebSocket):
         try:

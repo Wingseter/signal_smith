@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     kiwoom_base_url: str = "https://mockapi.kiwoom.com"
     kiwoom_ws_url: str = "wss://mockapi.kiwoom.com:10000"
     kiwoom_is_mock: bool = True
+    kiwoom_verify_ssl: bool = True
 
     # DART API
     dart_api_key: Optional[str] = None
@@ -96,6 +97,13 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @model_validator(mode="after")
+    def _set_ssl_default(self) -> "Settings":
+        """Auto-disable SSL verification for mock API (self-signed cert)."""
+        if self.kiwoom_is_mock and self.kiwoom_verify_ssl:
+            object.__setattr__(self, "kiwoom_verify_ssl", False)
+        return self
 
     @model_validator(mode="after")
     def _validate_production(self) -> "Settings":

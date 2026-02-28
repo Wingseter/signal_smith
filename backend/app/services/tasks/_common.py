@@ -7,21 +7,22 @@ logger = logging.getLogger(__name__)
 
 
 def run_async(coro):
-    """Helper to run async functions in sync Celery context."""
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    return loop.run_until_complete(coro)
+    """Run an async coroutine from a synchronous Celery task context.
+
+    Uses asyncio.run() which creates a fresh event loop per call,
+    avoiding loop reuse/pollution across Celery worker threads.
+    """
+    return asyncio.run(coro)
 
 
 def is_market_hours() -> bool:
-    """Check if Korean stock market is open (KST)."""
-    from app.services.council.trading_hours import trading_hours, MarketSession
+    """Return True when the market accepts orders (KST).
 
-    session = trading_hours.get_market_session()
-    return session in (MarketSession.REGULAR,)
+    Delegates to trading_hours.can_execute_order() for single source of truth,
+    covering regular (09:00-15:30), pre-market (08:30-09:00),
+    and post-market (15:40-18:30) sessions.
+    """
+    from app.services.council.trading_hours import trading_hours
+
+    can_trade, _ = trading_hours.can_execute_order()
+    return can_trade

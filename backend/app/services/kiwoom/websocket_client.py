@@ -97,7 +97,7 @@ class KiwoomWebSocketClient:
             "https://mockapi.kiwoom.com" if self.is_mock else "https://api.kiwoom.com"
         )
 
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+        async with httpx.AsyncClient(verify=settings.kiwoom_verify_ssl, timeout=30.0) as client:
             try:
                 response = await client.post(
                     f"{base_url}/oauth2/token",

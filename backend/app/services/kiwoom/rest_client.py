@@ -192,7 +192,7 @@ class KiwoomRestClient(KiwoomBaseClient):
         logger.debug(f"Headers: {headers}")
         logger.debug(f"Data: {data}")
 
-        async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=30.0, verify=settings.kiwoom_verify_ssl) as client:
             if method.upper() == "GET":
                 response = await client.get(url, headers=headers, params=data)
             else:
@@ -844,7 +844,7 @@ class KiwoomRestClient(KiwoomBaseClient):
             while True:
                 headers = self._get_headers(api_id="ka10073", cont_yn=cont_yn, next_key=next_key)
 
-                async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+                async with httpx.AsyncClient(timeout=30.0, verify=settings.kiwoom_verify_ssl) as client:
                     response = await client.post(
                         f"{self.base_url}/api/dostk/acnt",
                         headers=headers,

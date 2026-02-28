@@ -740,14 +740,20 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
                                 await self._update_signal_status_in_db(signal, executed=True)
                             else:
                                 logger.warning(f"주문 실패, 대기열에 추가: {signal.symbol} - {order_result.message}")
+                                signal.status = SignalStatus.QUEUED
                                 self._queued_executions.append(signal)
+                                await self._update_signal_status_in_db(signal)
                         except Exception as e:
                             logger.error(f"주문 오류, 대기열에 추가: {signal.symbol} - {e}")
+                            signal.status = SignalStatus.QUEUED
                             self._queued_executions.append(signal)
+                            await self._update_signal_status_in_db(signal)
                     else:
                         # 거래 불가 시간 - 대기열에 추가
                         logger.info(f"거래 시간 외, 대기열에 추가: {signal.symbol} {signal.action} - {reason}")
+                        signal.status = SignalStatus.QUEUED
                         self._queued_executions.append(signal)
+                        await self._update_signal_status_in_db(signal)
 
                 return signal
         return None
