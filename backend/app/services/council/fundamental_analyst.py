@@ -14,7 +14,7 @@ import logging
 from typing import Optional
 import json
 
-import anthropic
+from openai import AsyncOpenAI
 
 from app.config import settings
 from .models import CouncilMessage, AnalystRole
@@ -98,20 +98,20 @@ class FundamentalAnalyst:
 }}"""
 
     def __init__(self):
-        self._client: Optional[anthropic.AsyncAnthropic] = None
+        self._client: Optional[AsyncOpenAI] = None
         self._initialized = False
 
     def _initialize(self):
-        """Anthropic 클라이언트 초기화"""
+        """OpenAI 호환 클라이언트 초기화 (CLIProxiAPI 경유)"""
         if self._initialized:
             return
 
         if not settings.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY가 설정되지 않았습니다")
 
-        self._client = anthropic.AsyncAnthropic(
+        self._client = AsyncOpenAI(
             api_key=settings.anthropic_api_key,
-            base_url=settings.anthropic_base_url,
+            base_url=settings.anthropic_base_url or "https://api.anthropic.com/v1",
         )
         self._initialized = True
         logger.info(f"Claude 펀더멘털 분석가 초기화 (모델: {settings.anthropic_model})")
@@ -165,16 +165,16 @@ class FundamentalAnalyst:
             logger.warning(f"[펀더멘털분석] {symbol} - 재무제표 없이 분석")
 
         try:
-            response = await self._client.messages.create(
+            response = await self._client.chat.completions.create(
                 model=settings.anthropic_model,
                 max_tokens=2048,
-                system=self.SYSTEM_PROMPT,
                 messages=[
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
             )
 
-            response_text = response.content[0].text
+            response_text = response.choices[0].message.content
 
             # JSON 파싱 시도
             try:
@@ -315,14 +315,16 @@ class FundamentalAnalyst:
         )
 
         try:
-            response = await self._client.messages.create(
+            response = await self._client.chat.completions.create(
                 model=settings.anthropic_model,
                 max_tokens=1024,
-                system=self.SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
             )
 
-            response_text = response.content[0].text
+            response_text = response.choices[0].message.content
 
             try:
                 if "```json" in response_text:

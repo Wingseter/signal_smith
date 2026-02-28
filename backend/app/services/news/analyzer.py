@@ -1,5 +1,5 @@
 """
-뉴스 분석 서비스 (Gemini)
+뉴스 분석 서비스 (Gemini via CLIProxiAPI)
 
 실시간 뉴스 분석을 위한 빠른 Gemini 기반 분석기
 """
@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-import google.generativeai as genai
+from openai import AsyncOpenAI
 
 from app.config import settings
 from .models import (
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class NewsAnalyzer:
-    """Gemini 기반 뉴스 분석기"""
+    """Gemini 기반 뉴스 분석기 (CLIProxiAPI OpenAI 호환)"""
 
     ANALYSIS_PROMPT = """당신은 한국 주식시장 전문 애널리스트입니다.
 다음 뉴스가 관련 종목의 주가에 미칠 영향을 분석해주세요.
@@ -58,19 +58,21 @@ class NewsAnalyzer:
 """
 
     def __init__(self):
-        self._model = None
+        self._client: Optional[AsyncOpenAI] = None
         self._initialized = False
 
     def _initialize(self):
-        """Gemini 모델 초기화"""
+        """OpenAI 호환 클라이언트 초기화 (CLIProxiAPI 경유)"""
         if self._initialized:
             return
 
         if not settings.google_api_key:
             raise ValueError("GOOGLE_API_KEY가 설정되지 않았습니다")
 
-        genai.configure(api_key=settings.google_api_key)
-        self._model = genai.GenerativeModel(settings.gemini_model)
+        self._client = AsyncOpenAI(
+            api_key=settings.google_api_key,
+            base_url=settings.google_base_url or "https://generativelanguage.googleapis.com/v1beta/openai",
+        )
         self._initialized = True
         logger.info(f"Gemini 분석기 초기화 완료 (모델: {settings.gemini_model})")
 
@@ -218,15 +220,15 @@ class NewsAnalyzer:
                 content=content[:500]  # 토큰 절약
             )
 
-            response = await self._model.generate_content_async(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=4096,
-                )
+            response = await self._client.chat.completions.create(
+                model=settings.gemini_model,
+                max_tokens=4096,
+                temperature=0.3,
+                messages=[{"role": "user", "content": prompt}],
             )
 
-            parsed = self._parse_response(response.text)
+            response_text = response.choices[0].message.content
+            parsed = self._parse_response(response_text)
 
             # 추출된 종목정보로 article 업데이트
             if parsed["company_name"] and not article.company_name:

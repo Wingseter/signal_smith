@@ -23,10 +23,13 @@ class ClaudeFundamentalAgent:
         self._client = None
 
     def _get_client(self):
-        """Lazy initialization of Anthropic client."""
+        """Lazy initialization of OpenAI-compatible client (via CLIProxiAPI)."""
         if self._client is None and self.api_key:
-            from anthropic import AsyncAnthropic
-            self._client = AsyncAnthropic(api_key=self.api_key, base_url=settings.anthropic_base_url)
+            from openai import AsyncOpenAI
+            self._client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=settings.anthropic_base_url or "https://api.anthropic.com/v1",
+            )
         return self._client
 
     def _format_financial_data(self, data: dict) -> str:
@@ -165,14 +168,14 @@ class ClaudeFundamentalAgent:
 
             Respond only with valid JSON."""
 
-            message = await client.messages.create(
+            response = await client.chat.completions.create(
                 model=self.model_name,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],
             )
 
             import json
-            response_text = message.content[0].text
+            response_text = response.choices[0].message.content
 
             # Try to extract JSON from response
             try:
@@ -264,14 +267,14 @@ class ClaudeFundamentalAgent:
             }}
             """
 
-            message = await client.messages.create(
+            response = await client.chat.completions.create(
                 model=self.model_name,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],
             )
 
             import json
-            response_text = message.content[0].text
+            response_text = response.choices[0].message.content
 
             try:
                 start = response_text.find("{")
@@ -446,13 +449,13 @@ class ClaudeFundamentalAgent:
             }}
             """
 
-            message = await client.messages.create(
+            response = await client.chat.completions.create(
                 model=self.model_name,
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
 
-            response_text = message.content[0].text
+            response_text = response.choices[0].message.content
 
             try:
                 start = response_text.find("{")
@@ -549,13 +552,13 @@ class ClaudeFundamentalAgent:
             }}
             """
 
-            message = await client.messages.create(
+            response = await client.chat.completions.create(
                 model=self.model_name,
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
 
-            response_text = message.content[0].text
+            response_text = response.choices[0].message.content
 
             try:
                 start = response_text.find("{")

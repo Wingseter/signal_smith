@@ -1,5 +1,5 @@
 """
-Gemini AI Agent for Real-time News Analysis
+Gemini AI Agent for Real-time News Analysis (via CLIProxiAPI)
 
 Responsibilities:
 - Monitor news headlines and breaking news
@@ -11,11 +11,13 @@ from typing import Optional, List
 from datetime import datetime
 import json
 
+from openai import AsyncOpenAI
+
 from app.config import settings
 
 
 class GeminiNewsAgent:
-    """Gemini-based agent for news and sentiment analysis."""
+    """Gemini-based agent for news and sentiment analysis (OpenAI compatible)."""
 
     def __init__(self):
         self.model_name = settings.gemini_model
@@ -23,12 +25,21 @@ class GeminiNewsAgent:
         self._client = None
 
     def _get_client(self):
-        """Lazy initialization of Gemini client."""
+        """Lazy initialization of OpenAI-compatible client (via CLIProxiAPI)."""
         if self._client is None and self.api_key:
-            import google.generativeai as genai
-            genai.configure(api_key=self.api_key)
-            self._client = genai.GenerativeModel(self.model_name)
+            self._client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=settings.google_base_url or "https://generativelanguage.googleapis.com/v1beta/openai",
+            )
         return self._client
+
+    def _parse_json_response(self, text: str) -> dict:
+        """Parse JSON from response, handling markdown code blocks."""
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0]
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0]
+        return json.loads(text.strip())
 
     async def analyze(
         self,
@@ -112,28 +123,19 @@ class GeminiNewsAgent:
             Respond only with valid JSON.
             """
 
-            import google.generativeai as genai
-            response = await client.generate_content_async(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=4096,
-                ),
+            response = await client.chat.completions.create(
+                model=self.model_name,
+                max_tokens=4096,
+                temperature=0.3,
+                messages=[{"role": "user", "content": prompt}],
             )
 
-            # Parse response - handle markdown code blocks from Gemini 2.5+
-            import json
             try:
-                text = response.text
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0]
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0]
-                result = json.loads(text.strip())
+                result = self._parse_json_response(response.choices[0].message.content)
             except (json.JSONDecodeError, IndexError):
                 result = {
                     "sentiment_score": 0,
-                    "summary": response.text[:500],
+                    "summary": response.choices[0].message.content[:500],
                     "recommendation": "hold",
                     "confidence": 50,
                 }
@@ -197,28 +199,20 @@ class GeminiNewsAgent:
             }}
             """
 
-            import google.generativeai as genai
-            response = await client.generate_content_async(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=4096,
-                ),
+            response = await client.chat.completions.create(
+                model=self.model_name,
+                max_tokens=4096,
+                temperature=0.3,
+                messages=[{"role": "user", "content": prompt}],
             )
 
-            import json
             try:
-                text = response.text
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0]
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0]
-                return json.loads(text.strip())
+                return self._parse_json_response(response.choices[0].message.content)
             except (json.JSONDecodeError, IndexError):
                 return {
                     "impact_level": "medium",
                     "sentiment": "neutral",
-                    "brief_analysis": response.text[:200],
+                    "brief_analysis": response.choices[0].message.content[:200],
                 }
 
         except Exception as e:
@@ -267,30 +261,22 @@ class GeminiNewsAgent:
             }}
             """
 
-            import google.generativeai as genai
-            response = await client.generate_content_async(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=4096,
-                ),
+            response = await client.chat.completions.create(
+                model=self.model_name,
+                max_tokens=4096,
+                temperature=0.3,
+                messages=[{"role": "user", "content": prompt}],
             )
 
             try:
-                text = response.text
-                # Gemini 2.5+ may wrap JSON in markdown code blocks
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0]
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0]
-                result = json.loads(text.strip())
+                result = self._parse_json_response(response.choices[0].message.content)
                 result["analyzed_at"] = datetime.utcnow().isoformat()
                 return result
             except (json.JSONDecodeError, IndexError):
                 return {
                     "market": market,
                     "overall_sentiment": "neutral",
-                    "analysis": response.text[:500],
+                    "analysis": response.choices[0].message.content[:500],
                     "analyzed_at": datetime.utcnow().isoformat(),
                 }
 
@@ -378,25 +364,17 @@ class GeminiNewsAgent:
             }}
             """
 
-            import google.generativeai as genai
-            response = await client.generate_content_async(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    temperature=0.3,
-                    max_output_tokens=4096,
-                ),
+            response = await client.chat.completions.create(
+                model=self.model_name,
+                max_tokens=4096,
+                temperature=0.3,
+                messages=[{"role": "user", "content": prompt}],
             )
 
             try:
-                text = response.text
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0]
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0]
-                result = json.loads(text.strip())
+                result = self._parse_json_response(response.choices[0].message.content)
             except (json.JSONDecodeError, IndexError):
-                # Fallback: try to extract JSON from response
-                text = response.text
+                text = response.choices[0].message.content
                 start = text.find("{")
                 end = text.rfind("}") + 1
                 if start >= 0 and end > start:
