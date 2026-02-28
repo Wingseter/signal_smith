@@ -9,7 +9,7 @@ import json
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Query, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -19,6 +19,8 @@ from app.services.trading_service import trading_service
 from app.core.websocket import BaseConnectionManager
 from app.core.database import async_session_maker
 from app.models.transaction import TradingSignal as TradingSignalModel
+from app.api.routes.auth import get_current_user
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["AI Council"])
@@ -77,7 +79,7 @@ council_orchestrator.add_signal_callback(on_signal_created)
 # ============ REST API ============
 
 @router.get("/status")
-async def get_status():
+async def get_status(current_user: User = Depends(get_current_user)):
     """시스템 상태 조회"""
     stats = news_trader.get_stats()
     trading_status = council_orchestrator.get_trading_status()
@@ -97,7 +99,7 @@ async def get_status():
 
 
 @router.post("/start")
-async def start_monitoring(config: Optional[CouncilConfig] = None):
+async def start_monitoring(config: Optional[CouncilConfig] = None, current_user: User = Depends(get_current_user)):
     """뉴스 모니터링 및 AI 회의 시스템 시작"""
     if config:
         news_trader.update_config(
@@ -117,14 +119,14 @@ async def start_monitoring(config: Optional[CouncilConfig] = None):
 
 
 @router.post("/stop")
-async def stop_monitoring():
+async def stop_monitoring(current_user: User = Depends(get_current_user)):
     """모니터링 중지"""
     await news_trader.stop()
     return {"status": "stopped"}
 
 
 @router.get("/meetings")
-async def get_meetings(limit: int = Query(default=10, le=100)):
+async def get_meetings(limit: int = Query(default=10, le=100), current_user: User = Depends(get_current_user)):
     """최근 회의 목록"""
     meetings = news_trader.get_recent_meetings(limit)
     return {
@@ -134,7 +136,7 @@ async def get_meetings(limit: int = Query(default=10, le=100)):
 
 
 @router.get("/meetings/{meeting_id}")
-async def get_meeting(meeting_id: str):
+async def get_meeting(meeting_id: str, current_user: User = Depends(get_current_user)):
     """회의 상세 조회"""
     meeting = council_orchestrator.get_meeting(meeting_id)
     if not meeting:
@@ -143,7 +145,7 @@ async def get_meeting(meeting_id: str):
 
 
 @router.get("/meetings/{meeting_id}/transcript")
-async def get_meeting_transcript(meeting_id: str):
+async def get_meeting_transcript(meeting_id: str, current_user: User = Depends(get_current_user)):
     """회의록 텍스트 조회"""
     meeting = council_orchestrator.get_meeting(meeting_id)
     if not meeting:
@@ -155,7 +157,7 @@ async def get_meeting_transcript(meeting_id: str):
 
 
 @router.get("/signals/pending")
-async def get_pending_signals():
+async def get_pending_signals(current_user: User = Depends(get_current_user)):
     """대기 중인 시그널 (DB 기반 — 재시작 후에도 유지)"""
     # in-memory 시그널 (승인 대기 중인 것)
     mem_signals = news_trader.get_pending_signals()
@@ -166,7 +168,7 @@ async def get_pending_signals():
             select(TradingSignalModel).where(
                 TradingSignalModel.signal_status.in_(["pending", "queued"]),
                 TradingSignalModel.is_executed == False,
-                TradingSignalModel.signal_type.in_(["buy", "sell"]),
+                TradingSignalModel.signal_type.in_(["buy", "sell", "partial_sell"]),
             ).order_by(TradingSignalModel.created_at.desc())
         )
         db_signals = result.scalars().all()
@@ -208,7 +210,7 @@ async def get_pending_signals():
 
 
 @router.post("/signals/approve")
-async def approve_signal(action: SignalAction):
+async def approve_signal(action: SignalAction, current_user: User = Depends(get_current_user)):
     """시그널 승인"""
     signal = await news_trader.approve_signal(action.signal_id)
     if not signal:
@@ -223,7 +225,7 @@ async def approve_signal(action: SignalAction):
 
 
 @router.post("/signals/reject")
-async def reject_signal(action: SignalAction):
+async def reject_signal(action: SignalAction, current_user: User = Depends(get_current_user)):
     """시그널 거부"""
     signal = await news_trader.reject_signal(action.signal_id)
     if not signal:
@@ -238,7 +240,7 @@ async def reject_signal(action: SignalAction):
 
 
 @router.post("/signals/execute")
-async def execute_signal(action: SignalAction):
+async def execute_signal(action: SignalAction, current_user: User = Depends(get_current_user)):
     """시그널 체결"""
     signal = await news_trader.execute_signal(action.signal_id)
     if not signal:
@@ -253,7 +255,7 @@ async def execute_signal(action: SignalAction):
 
 
 @router.post("/meetings/manual")
-async def start_manual_meeting(request: ManualMeetingRequest):
+async def start_manual_meeting(request: ManualMeetingRequest, current_user: User = Depends(get_current_user)):
     """수동 회의 시작 (테스트용)"""
     meeting = await council_orchestrator.start_meeting(
         symbol=request.symbol,
@@ -266,7 +268,7 @@ async def start_manual_meeting(request: ManualMeetingRequest):
 
 
 @router.post("/test/analyze-news")
-async def test_analyze_news():
+async def test_analyze_news(current_user: User = Depends(get_current_user)):
     """뉴스 크롤링 및 분석 테스트 (디버그용)"""
     from app.services.news import news_analyzer
 
@@ -312,7 +314,7 @@ async def test_analyze_news():
 
 
 @router.post("/test/force-council")
-async def test_force_council():
+async def test_force_council(current_user: User = Depends(get_current_user)):
     """강제로 회의 소집 테스트 (종목코드가 있는 뉴스만)"""
     from app.services.news import news_analyzer
 
@@ -367,7 +369,7 @@ async def test_force_council():
 
 
 @router.post("/test/mock-council")
-async def test_mock_council(symbol: str = "005930", company_name: str = "삼성전자"):
+async def test_mock_council(symbol: str = "005930", company_name: str = "삼성전자", current_user: User = Depends(get_current_user)):
     """알려진 종목으로 회의 소집 테스트 (디버그용)
 
     기본값: 삼성전자 (005930)
@@ -401,7 +403,7 @@ async def test_mock_council(symbol: str = "005930", company_name: str = "삼성�
 
 
 @router.put("/config")
-async def update_config(config: CouncilConfig):
+async def update_config(config: CouncilConfig, current_user: User = Depends(get_current_user)):
     """설정 업데이트"""
     news_trader.update_config(
         council_threshold=config.council_threshold,
@@ -413,19 +415,19 @@ async def update_config(config: CouncilConfig):
 
 
 @router.get("/trading-status")
-async def get_trading_status():
+async def get_trading_status(current_user: User = Depends(get_current_user)):
     """거래 상태 조회 (거래 시간, 대기 큐 등)"""
     return council_orchestrator.get_trading_status()
 
 
 @router.get("/cost-stats")
-async def get_cost_stats():
+async def get_cost_stats(current_user: User = Depends(get_current_user)):
     """AI 비용 통계 조회"""
     return council_orchestrator.get_cost_stats()
 
 
 @router.get("/queued-executions")
-async def get_queued_executions():
+async def get_queued_executions(current_user: User = Depends(get_current_user)):
     """거래 시간 대기 중인 시그널 목록"""
     signals = council_orchestrator.get_queued_executions()
     return {
@@ -435,7 +437,7 @@ async def get_queued_executions():
 
 
 @router.get("/account/realized-pnl")
-async def get_realized_pnl(period: str = Query(default="1m")):
+async def get_realized_pnl(period: str = Query(default="1m"), current_user: User = Depends(get_current_user)):
     """실현 수익 조회 (키움 ka10073)
 
     Args:
@@ -506,21 +508,21 @@ async def get_realized_pnl(period: str = Query(default="1m")):
 
 
 @router.get("/account/balance")
-async def get_account_balance():
+async def get_account_balance(current_user: User = Depends(get_current_user)):
     """키움 계좌 잔고 조회"""
     summary = await _get_account_summary()
     return summary["balance"]
 
 
 @router.get("/account/holdings")
-async def get_account_holdings():
+async def get_account_holdings(current_user: User = Depends(get_current_user)):
     """키움 보유종목 조회"""
     summary = await _get_account_summary()
     return {"holdings": summary["holdings"], "count": len(summary["holdings"])}
 
 
 @router.get("/account/summary")
-async def get_account_summary():
+async def get_account_summary(current_user: User = Depends(get_current_user)):
     """계좌 잔고 + 보유종목 통합 조회 (캐시 적용)"""
     return await _get_account_summary()
 
@@ -565,7 +567,7 @@ async def _get_account_summary() -> dict:
 
 
 @router.post("/process-queue")
-async def process_queued_executions():
+async def process_queued_executions(current_user: User = Depends(get_current_user)):
     """대기 큐 수동 처리 (거래 시간에만 작동)"""
     executed = await council_orchestrator.process_queued_executions()
 
@@ -585,7 +587,9 @@ async def process_queued_executions():
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """실시간 회의 스트리밍 WebSocket"""
+    """실시간 회의 스트리밍 WebSocket
+    TODO(Phase 2): WebSocket 인증 — 토큰 기반 핸드셰이크 인증 추가 필요
+    """
     await manager.connect(websocket)
 
     # 초기 상태 전송

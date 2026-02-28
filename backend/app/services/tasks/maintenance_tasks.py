@@ -24,8 +24,11 @@ def cleanup_old_data(days: int = 90):
 
             db.execute(
                 TradingSignal.__table__.update()
-                .where(TradingSignal.created_at < cutoff_date)
-                .values(is_active=False)
+                .where(
+                    TradingSignal.created_at < cutoff_date,
+                    TradingSignal.is_executed == False,
+                )
+                .values(is_executed=True, signal_status="expired")
             )
 
             db.commit()

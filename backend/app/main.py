@@ -23,27 +23,10 @@ configure_logging(
 logger = logging.getLogger(__name__)
 
 
-async def _ensure_signal_columns():
-    """TradingSignal 테이블에 quantity, signal_status 컬럼 추가 (없으면)"""
-    from sqlalchemy import text
-    from app.core.database import engine
-
-    async with engine.begin() as conn:
-        for col, col_type in [("quantity", "INT"), ("signal_status", "VARCHAR(20)")]:
-            try:
-                await conn.execute(text(
-                    f"ALTER TABLE trading_signals ADD COLUMN {col} {col_type} NULL"
-                ))
-                logger.info(f"trading_signals.{col} 컬럼 추가됨")
-            except Exception:
-                pass  # 이미 존재하면 무시
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle manager."""
     await init_db()
-    await _ensure_signal_columns()
 
     # 미체결 시그널 복원
     from app.services.council.orchestrator import council_orchestrator

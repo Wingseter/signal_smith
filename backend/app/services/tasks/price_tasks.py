@@ -37,28 +37,25 @@ def collect_stock_prices(self):
             symbols = [stock.symbol for stock in stocks]
             logger.info(f"Collecting prices for {len(symbols)} stocks")
 
-            from app.services.kiwoom.rest_client import KiwoomRestClient
+            from app.services.kiwoom.rest_client import kiwoom_client
 
-            client = KiwoomRestClient()
             collected_count = 0
             errors = []
 
             for symbol in symbols:
                 try:
-                    price_data = run_async(client.get_current_price(symbol))
+                    kiwoom_price = run_async(kiwoom_client.get_stock_price(symbol))
 
-                    if price_data:
+                    if kiwoom_price:
                         stock_price = StockPrice(
                             symbol=symbol,
                             date=datetime.utcnow(),
-                            open=price_data.get("open", 0),
-                            high=price_data.get("high", 0),
-                            low=price_data.get("low", 0),
-                            close=price_data.get("close", 0),
-                            volume=price_data.get("volume", 0),
-                            change_percent=price_data.get(
-                                "change_percent", price_data.get("change_rate", 0)
-                            ),
+                            open=kiwoom_price.open_price,
+                            high=kiwoom_price.high_price,
+                            low=kiwoom_price.low_price,
+                            close=kiwoom_price.current_price,
+                            volume=kiwoom_price.volume,
+                            change_percent=kiwoom_price.change_rate,
                         )
                         db.add(stock_price)
                         collected_count += 1
@@ -92,17 +89,16 @@ def collect_historical_prices(symbol: str, days: int = 365):
             if not stock:
                 return {"status": "error", "reason": "stock_not_found"}
 
-            from app.services.kiwoom.rest_client import KiwoomRestClient
+            from app.services.kiwoom.rest_client import kiwoom_client
 
-            client = KiwoomRestClient()
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
 
             history = run_async(
-                client.get_price_history(
+                kiwoom_client.get_daily_prices(
                     symbol,
-                    start_date.strftime("%Y%m%d"),
-                    end_date.strftime("%Y%m%d"),
+                    start_date=start_date.strftime("%Y%m%d"),
+                    end_date=end_date.strftime("%Y%m%d"),
                 )
             )
 

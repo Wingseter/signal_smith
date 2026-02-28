@@ -74,11 +74,11 @@ def monitor_signals(self):
                             "symbol": signal.symbol,
                             "price": price,
                         })
-                        signal.is_executed = True
                         send_notification.delay(
                             "stop_loss", f"[손절] {signal.symbol}: {price:,}원 도달"
                         )
                         _trigger_sell_for_signal(signal, price, "stop_loss")
+                        signal.is_executed = True
 
                     elif signal.target_price and price >= signal.target_price:
                         actions.append({
@@ -87,11 +87,11 @@ def monitor_signals(self):
                             "symbol": signal.symbol,
                             "price": price,
                         })
-                        signal.is_executed = True
                         send_notification.delay(
                             "target_reached", f"[목표가] {signal.symbol}: {price:,}원 도달"
                         )
                         _trigger_sell_for_signal(signal, price, "take_profit")
+                        signal.is_executed = True
 
                     elif signal.created_at < datetime.utcnow() - timedelta(hours=24):
                         signal.is_executed = True
@@ -570,7 +570,7 @@ async def _process_council_queue_from_db() -> dict:
                 select(TradingSignalModel).where(
                     TradingSignalModel.signal_status == "queued",
                     TradingSignalModel.is_executed == False,
-                    TradingSignalModel.signal_type.in_(["buy", "sell"]),
+                    TradingSignalModel.signal_type.in_(["buy", "sell", "partial_sell"]),
                     TradingSignalModel.quantity > 0,
                 )
             )
@@ -795,13 +795,19 @@ def _trigger_sell_for_signal(signal: TradingSignal, current_price: int, trigger_
         except Exception:
             pass
 
+        # 실제 보유 정보 조회
+        holdings = run_async(_get_cached_holdings())
+        held = next((h for h in (holdings or []) if h.symbol == signal.symbol), None)
+        actual_holdings = held.quantity if held else 0
+        actual_avg_price = held.avg_price if held else 0
+
         run_async(
             council_orchestrator.start_sell_meeting(
                 symbol=signal.symbol,
                 company_name=company_name,
                 sell_reason=f"{trigger_type}: 시그널 가격 도달 ({current_price:,}원)",
-                current_holdings=0,  # sell meeting에서 자체 조회
-                avg_buy_price=0,
+                current_holdings=actual_holdings,
+                avg_buy_price=actual_avg_price,
                 current_price=current_price,
             )
         )

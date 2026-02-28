@@ -387,8 +387,11 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
         if final_percent == 0:
             final_percent = (quant_percent + fundamental_percent) / 2
 
-        # 단일 매매 최대 25% 제한
-        final_percent = min(25, abs(final_percent))
+        # 단일 매매 최대 25% 제한 (부호 보존)
+        if final_percent >= 0:
+            final_percent = min(25, final_percent)
+        else:
+            final_percent = max(-25, final_percent)
 
         # ─── Phase 1: 데이터 품질 게이트 ───
         if analysis_failures >= 2:
@@ -709,11 +712,12 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
             if signal.id == signal_id and signal.status == SignalStatus.PENDING:
                 signal.status = SignalStatus.APPROVED
                 logger.info(f"시그널 승인됨: {signal.symbol} {signal.action}")
-                
+                await self._update_signal_status_in_db(signal)
+
                 # HOLD가 아닌 경우 (BUY/SELL) 체결 시도
                 if signal.action in ["BUY", "SELL"]:
                     can_trade, reason = trading_hours.can_execute_order()
-                    
+
                     if can_trade or not self.respect_trading_hours:
                         # 거래 가능 시간 - 즉시 체결 시도
                         try:
@@ -725,7 +729,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
                                 price=0,
                                 order_type=OrderType.MARKET,
                             )
-                            
+
                             if order_result.status == "submitted":
                                 signal.status = SignalStatus.EXECUTED
                                 signal.executed_at = get_kst_now()
@@ -733,6 +737,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
                                     f"✅ 승인 후 즉시 체결: {signal.symbol} {signal.action} "
                                     f"{signal.suggested_quantity}주 (주문번호: {order_result.order_no})"
                                 )
+                                await self._update_signal_status_in_db(signal, executed=True)
                             else:
                                 logger.warning(f"주문 실패, 대기열에 추가: {signal.symbol} - {order_result.message}")
                                 self._queued_executions.append(signal)
@@ -743,7 +748,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
                         # 거래 불가 시간 - 대기열에 추가
                         logger.info(f"거래 시간 외, 대기열에 추가: {signal.symbol} {signal.action} - {reason}")
                         self._queued_executions.append(signal)
-                
+
                 return signal
         return None
 
@@ -753,6 +758,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
             if signal.id == signal_id and signal.status == SignalStatus.PENDING:
                 signal.status = SignalStatus.REJECTED
                 logger.info(f"시그널 거부됨: {signal.symbol}")
+                await self._update_signal_status_in_db(signal, cancelled=True)
                 return signal
         return None
 
@@ -785,6 +791,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
                             f"✅ 시그널 체결 성공: {signal.symbol} {signal.action} "
                             f"{signal.suggested_quantity}주 (주문번호: {order_result.order_no})"
                         )
+                        await self._update_signal_status_in_db(signal, executed=True)
                     else:
                         logger.error(
                             f"❌ 주문 실패: {signal.symbol} - {order_result.message}"
@@ -1042,7 +1049,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
         )
 
         # 1. 매도 검토 소집 메시지
-        profit_loss = (current_price - avg_buy_price) / avg_buy_price * 100
+        profit_loss = (current_price - avg_buy_price) / avg_buy_price * 100 if avg_buy_price > 0 else 0.0
         opening_msg = CouncilMessage(
             role=AnalystRole.MODERATOR,
             speaker="회의 중재자",
