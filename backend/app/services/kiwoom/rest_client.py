@@ -8,6 +8,7 @@ API Documentation: https://openapi.kiwoom.com
 """
 
 import asyncio
+import random
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import logging
@@ -176,9 +177,10 @@ class KiwoomRestClient(KiwoomBaseClient):
         endpoint: str,
         data: Dict[str, Any] = None,
         api_id: str = None,
-        _retry: bool = False
+        _retry: bool = False,
+        _retry_429: int = 0,
     ) -> Dict[str, Any]:
-        """API 요청 공통 메서드"""
+        """API 요청 공통 메서드 (429 exponential backoff + jitter 포함)"""
         if not await self.is_connected():
             await self.connect()
 
@@ -198,6 +200,35 @@ class KiwoomRestClient(KiwoomBaseClient):
 
             logger.debug(f"Response Status: {response.status_code}")
             logger.debug(f"Response Body: {response.text[:500] if response.text else 'Empty'}")
+
+            # 429 Rate Limit: exponential backoff + jitter (최대 3회)
+            if response.status_code == 429:
+                max_429_retries = 3
+                if _retry_429 >= max_429_retries:
+                    logger.error(
+                        f"429 Rate Limit 최대 재시도 초과 ({max_429_retries}회): "
+                        f"{api_id or endpoint}"
+                    )
+                    response.raise_for_status()
+
+                # Retry-After 헤더 우선 사용
+                retry_after = response.headers.get("Retry-After")
+                if retry_after:
+                    delay = float(retry_after)
+                else:
+                    # Exponential backoff: 1s, 2s, 4s + jitter (최대 50%)
+                    base_delay = 2 ** _retry_429
+                    jitter = random.uniform(0, base_delay * 0.5)
+                    delay = base_delay + jitter
+
+                logger.warning(
+                    f"429 Rate Limit — {delay:.1f}초 대기 후 재시도 "
+                    f"({_retry_429 + 1}/{max_429_retries}): {api_id or endpoint}"
+                )
+                await asyncio.sleep(delay)
+                return await self._request(
+                    method, endpoint, data, api_id, _retry, _retry_429 + 1
+                )
 
             response.raise_for_status()
             result = response.json()
@@ -302,10 +333,19 @@ class KiwoomRestClient(KiwoomBaseClient):
             return None
 
     async def get_stock_prices(self, symbols: List[str]) -> List[StockPrice]:
-        """복수 종목 현재가 조회"""
-        tasks = [self.get_stock_price(symbol) for symbol in symbols]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        return [r for r in results if isinstance(r, StockPrice)]
+        """복수 종목 현재가 조회 (0.2초 간격 순차 요청으로 429 방지)"""
+        results = []
+        for i, symbol in enumerate(symbols):
+            try:
+                price = await self.get_stock_price(symbol)
+                if price:
+                    results.append(price)
+            except Exception as e:
+                logger.warning(f"시세 조회 실패 [{symbol}]: {e}")
+            # 마지막 종목 제외, 요청 간 0.2초 딜레이 (초당 5회 이내)
+            if i < len(symbols) - 1:
+                await asyncio.sleep(0.2)
+        return results
 
     async def get_daily_prices(
         self,

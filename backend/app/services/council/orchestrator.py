@@ -220,6 +220,9 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
         meeting.add_message(opening_msg)
         await self._notify_meeting_update(meeting)
 
+        # 데이터 품질 추적 (Phase 1)
+        analysis_failures = 0
+
         # 2. 라운드 1: 초기 분석
         meeting.current_round = 1
 
@@ -243,6 +246,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
             quant_score = quant_msg.data.get("score", 5) if quant_msg.data else 5
         except (asyncio.TimeoutError, Exception) as e:
             logger.error(f"퀀트 분석가 API 호출 실패 또는 타임아웃: {e}")
+            analysis_failures += 1
             # Fallback 로직: 기본값 할당 및 에러 메시지 생성
             quant_msg = CouncilMessage(
                 role=AnalystRole.GPT_QUANT,
@@ -274,6 +278,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
             fundamental_score = fundamental_msg.data.get("score", 5) if fundamental_msg.data else 5
         except (asyncio.TimeoutError, Exception) as e:
             logger.error(f"기본적 분석가 API 호출 실패 또는 타임아웃: {e}")
+            analysis_failures += 1
             # Fallback 로직: 기본값 할당 및 에러 메시지 생성
             fundamental_msg = CouncilMessage(
                 role=AnalystRole.FUNDAMENTAL,
@@ -382,6 +387,30 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
         if final_percent == 0:
             final_percent = (quant_percent + fundamental_percent) / 2
 
+        # 단일 매매 최대 25% 제한
+        final_percent = min(25, abs(final_percent))
+
+        # ─── Phase 1: 데이터 품질 게이트 ───
+        if analysis_failures >= 2:
+            logger.warning(
+                f"🚫 데이터 품질 게이트 차단: {symbol} — "
+                f"분석 실패 {analysis_failures}건 (2건 이상, 시그널 폐기)"
+            )
+            gate_msg = CouncilMessage(
+                role=AnalystRole.MODERATOR,
+                speaker="리스크 관리자",
+                content=(
+                    f"🚫 **데이터 품질 게이트 차단**\n\n"
+                    f"AI 분석가 {analysis_failures}명 모두 분석 실패.\n"
+                    f"불완전한 데이터로 매매 결정을 내릴 수 없어 시그널을 폐기합니다."
+                ),
+                data={"gate": "data_quality", "failures": analysis_failures},
+            )
+            meeting.add_message(gate_msg)
+            await self._notify_meeting_update(meeting)
+            meeting.ended_at = datetime.now()
+            return meeting
+
         # 보유 기한 결정 (consensus_msg.data에서 holding_days 추출)
         holding_days = 7  # 기본값
         if consensus_msg.data:
@@ -390,7 +419,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
         holding_deadline = date.today() + timedelta(days=holding_days)
 
         # 5. 시그널 생성
-        suggested_amount = int(available_amount * abs(final_percent) / 100)
+        suggested_amount = int(available_amount * final_percent / 100)
         suggested_quantity = suggested_amount // current_price if current_price > 0 else 0
 
         # 신뢰도 계산 - 점수 기반 동적 계산
@@ -399,6 +428,14 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
         score_diff = abs(quant_score - fundamental_score)
         agreement_bonus = max(0, (5 - score_diff) * 0.02)  # 의견 일치시 최대 +0.1
         confidence = min(0.95, base_confidence + agreement_bonus)
+
+        # 데이터 품질 페널티: 1건 실패 시 신뢰도 -0.15
+        if analysis_failures == 1:
+            confidence = max(0, confidence - 0.15)
+            logger.info(
+                f"데이터 품질 경고: {symbol} — 분석 1건 실패, "
+                f"신뢰도 -0.15 적용 → {confidence:.2f}"
+            )
 
         # 기술적 분석 데이터가 있으면 진입가/손절가/목표가 포함
         entry_price = quant_msg.data.get("entry_price") if quant_msg.data else None
@@ -425,6 +462,78 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
             except Exception as e:
                 logger.warning(f"보유 확인 실패, SELL → HOLD: {symbol} - {e}")
                 action = "HOLD"
+
+        # ─── Phase 1: 체결 전 3중 게이트 (BUY 시그널만) ───
+        if action == "BUY":
+            gate_blocked = False
+            gate_reason = ""
+
+            try:
+                balance = await kiwoom_client.get_balance()
+                holdings = await kiwoom_client.get_holdings()
+                total_assets = balance.available_amount + balance.total_evaluation
+
+                if total_assets <= 0:
+                    total_assets = available_amount  # fallback
+
+                # Gate A: 최소 포지션 금액
+                min_position_amount = int(total_assets * settings.min_position_pct / 100)
+                if suggested_amount < min_position_amount:
+                    gate_blocked = True
+                    gate_reason = (
+                        f"Gate A 최소 포지션 미달: "
+                        f"제안 {suggested_amount:,}원 < "
+                        f"최소 {min_position_amount:,}원 "
+                        f"(총자산 {total_assets:,}원 x {settings.min_position_pct}%)"
+                    )
+
+                # Gate B: 현금 보유 비율
+                if not gate_blocked:
+                    cash_after_buy = balance.available_amount - suggested_amount
+                    min_cash = int(total_assets * settings.min_cash_reserve_pct / 100)
+                    if cash_after_buy < min_cash:
+                        gate_blocked = True
+                        gate_reason = (
+                            f"Gate B 현금 보유 부족: "
+                            f"매수 후 예상 현금 {cash_after_buy:,}원 < "
+                            f"최소 {min_cash:,}원 "
+                            f"(총자산 {total_assets:,}원 x {settings.min_cash_reserve_pct}%)"
+                        )
+
+                # Gate C: 최대 보유 종목 수
+                if not gate_blocked:
+                    current_holding_count = len([h for h in holdings if h.quantity > 0])
+                    is_additional_buy = any(
+                        h.symbol == symbol for h in holdings if h.quantity > 0
+                    )
+                    if current_holding_count >= settings.max_positions and not is_additional_buy:
+                        gate_blocked = True
+                        gate_reason = (
+                            f"Gate C 최대 종목 수 초과: "
+                            f"현재 {current_holding_count}종목 >= "
+                            f"최대 {settings.max_positions}종목"
+                        )
+
+            except Exception as e:
+                logger.warning(f"게이트 검증 실패, 안전하게 차단: {symbol} - {e}")
+                gate_blocked = True
+                gate_reason = f"게이트 검증 오류: {e}"
+
+            if gate_blocked:
+                logger.info(f"🚫 게이트 차단: {symbol} — {gate_reason}")
+                action = "HOLD"
+                gate_msg = CouncilMessage(
+                    role=AnalystRole.MODERATOR,
+                    speaker="리스크 관리자",
+                    content=(
+                        f"🚫 **매수 차단 (포트폴리오 규율)**\n\n"
+                        f"{gate_reason}\n\n"
+                        f"원래 결정(BUY {final_percent:.1f}%)을 HOLD로 전환합니다."
+                    ),
+                    data={"gate_blocked": True, "gate_reason": gate_reason},
+                )
+                meeting.add_message(gate_msg)
+                await self._notify_meeting_update(meeting)
 
         signal = InvestmentSignal(
             symbol=symbol,
@@ -458,6 +567,18 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
 
         # 자동 체결 여부 결정 (BUY/SELL만)
         elif self.auto_execute and confidence >= self.min_confidence:
+            # 잔고 확인 (BUY 시)
+            if action == "BUY":
+                try:
+                    balance = await kiwoom_client.get_balance()
+                    if balance.available_amount < signal.suggested_amount:
+                        logger.warning(
+                            f"잔고 부족 — 시그널 취소: {symbol} "
+                            f"(필요 {signal.suggested_amount:,}원 > 가용 {balance.available_amount:,}원)"
+                        )
+                        return meeting
+                except Exception as e:
+                    logger.warning(f"잔고 확인 실패, 계속 진행: {e}")
             can_trade, trade_reason = trading_hours.can_execute_order()
 
             if can_trade or not self.respect_trading_hours:
@@ -497,6 +618,10 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
                 self._queued_executions.append(signal)
                 logger.info(f"⏳ 거래 시간 대기: {symbol} {action} - {trade_reason}")
         else:
+            # 자동매매 켜진 경우 pending 시그널 버림
+            if self.auto_execute:
+                logger.info(f"자동매매 모드 — 신뢰도 미달 시그널 버림: {symbol} (신뢰도 {confidence:.0%} < {self.min_confidence:.0%})")
+                return meeting
             signal.status = SignalStatus.PENDING
 
         # 비용 기록
@@ -1088,8 +1213,26 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
         executed = []
         remaining = []
 
+        # 현재 잔고 조회 (한 번만)
+        available_balance = None
+        try:
+            balance = await kiwoom_client.get_balance()
+            available_balance = balance.available_amount
+        except Exception as e:
+            logger.warning(f"잔고 조회 실패, 잔고 체크 없이 진행: {e}")
+
         for signal in self._queued_executions:
             if signal.status in (SignalStatus.QUEUED, SignalStatus.PENDING, SignalStatus.APPROVED):
+                # 잔고 부족 시 시그널 취소
+                if signal.action == "BUY" and available_balance is not None:
+                    if available_balance < signal.suggested_amount:
+                        logger.warning(
+                            f"잔고 부족 — 시그널 취소: {signal.symbol} "
+                            f"(필요 {signal.suggested_amount:,}원 > 가용 {available_balance:,}원)"
+                        )
+                        await self._update_signal_status_in_db(signal, executed=False, cancelled=True)
+                        continue
+
                 try:
                     # 실제 키움 API 호출
                     side = OrderSide.BUY if signal.action == "BUY" else OrderSide.SELL
@@ -1220,7 +1363,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
         except Exception as e:
             logger.error(f"미체결 시그널 복원 실패: {e}")
 
-    async def _update_signal_status_in_db(self, signal: InvestmentSignal, executed: bool = False):
+    async def _update_signal_status_in_db(self, signal: InvestmentSignal, executed: bool = False, cancelled: bool = False):
         """DB 시그널 상태 업데이트"""
         db_id = getattr(signal, "_db_id", None)
         if not db_id:
@@ -1237,7 +1380,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
                 db_signal = result.scalar_one_or_none()
                 if db_signal:
                     db_signal.is_executed = executed
-                    db_signal.signal_status = signal.status.value
+                    db_signal.signal_status = "cancelled" if cancelled else signal.status.value
                     await session.commit()
         except Exception as e:
             logger.error(f"DB 시그널 상태 업데이트 실패 (id={db_id}): {e}")
