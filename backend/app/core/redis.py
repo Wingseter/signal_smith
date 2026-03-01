@@ -1,11 +1,13 @@
 from typing import Optional
 
+import redis as sync_redis
 import redis.asyncio as redis
 from redis.asyncio import Redis
 
 from app.config import settings
 
 redis_client: Optional[Redis] = None
+_sync_redis_client: Optional[sync_redis.Redis] = None
 
 
 async def get_redis() -> Redis:
@@ -18,6 +20,18 @@ async def get_redis() -> Redis:
             decode_responses=True,
         )
     return redis_client
+
+
+def get_redis_sync() -> sync_redis.Redis:
+    """Get synchronous Redis client for Celery tasks."""
+    global _sync_redis_client
+    if _sync_redis_client is None:
+        _sync_redis_client = sync_redis.from_url(
+            settings.redis_url,
+            encoding="utf-8",
+            decode_responses=True,
+        )
+    return _sync_redis_client
 
 
 async def close_redis() -> None:

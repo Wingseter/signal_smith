@@ -11,12 +11,14 @@ from .analysis_tasks import (  # noqa: F401
     run_single_analysis,
     run_quick_analysis,
 )
-from .signal_tasks import (  # noqa: F401
-    monitor_signals,
+from .monitoring_tasks import monitor_signals, monitor_holdings_sell  # noqa: F401
+from .execution_tasks import (  # noqa: F401
     auto_execute_signal,
-    scan_signals,
-    monitor_holdings_sell,
     process_council_queue,
+    rebalance_holdings,
+)
+from .scanning_tasks import (  # noqa: F401
+    scan_signals,
     refresh_stock_universe,
     refresh_account_summary,
 )

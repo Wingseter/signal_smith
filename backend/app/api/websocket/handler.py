@@ -10,81 +10,19 @@ WebSocket Handler
 import asyncio
 import json
 import logging
-from typing import Dict, Set, Optional
+from typing import Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.redis import get_redis
+from app.core.websocket import ChannelConnectionManager
 from app.services.stock_service import stock_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
-class ConnectionManager:
-    """WebSocket connection manager."""
-
-    def __init__(self):
-        self.active_connections: Dict[str, Set[WebSocket]] = {}
-        self.symbol_subscriptions: Dict[WebSocket, Set[str]] = {}
-
-    async def connect(self, websocket: WebSocket, channel: str = "default"):
-        await websocket.accept()
-        if channel not in self.active_connections:
-            self.active_connections[channel] = set()
-        self.active_connections[channel].add(websocket)
-        self.symbol_subscriptions[websocket] = set()
-
-    def disconnect(self, websocket: WebSocket, channel: str = "default"):
-        if channel in self.active_connections:
-            self.active_connections[channel].discard(websocket)
-        self.symbol_subscriptions.pop(websocket, None)
-
-    async def send_personal_message(self, message: dict, websocket: WebSocket):
-        try:
-            await websocket.send_json(message)
-        except Exception:
-            logger.debug("Failed to send personal message, client may have disconnected")
-
-    async def broadcast(self, message: dict, channel: str = "default"):
-        if channel in self.active_connections:
-            disconnected = []
-            for connection in self.active_connections[channel]:
-                try:
-                    await connection.send_json(message)
-                except Exception:
-                    logger.debug("Broadcast send failed, marking connection for cleanup")
-                    disconnected.append(connection)
-            for conn in disconnected:
-                self.disconnect(conn, channel)
-
-    async def broadcast_to_symbol_subscribers(self, symbol: str, message: dict):
-        """특정 종목 구독자에게만 브로드캐스트"""
-        disconnected = []
-        for websocket, symbols in self.symbol_subscriptions.items():
-            if symbol in symbols:
-                try:
-                    await websocket.send_json(message)
-                except Exception:
-                    logger.debug("Symbol broadcast failed for %s", symbol)
-                    disconnected.append(websocket)
-        for conn in disconnected:
-            self.disconnect(conn)
-
-    def subscribe_symbol(self, websocket: WebSocket, symbol: str):
-        if websocket in self.symbol_subscriptions:
-            self.symbol_subscriptions[websocket].add(symbol)
-
-    def unsubscribe_symbol(self, websocket: WebSocket, symbol: str):
-        if websocket in self.symbol_subscriptions:
-            self.symbol_subscriptions[websocket].discard(symbol)
-
-    def get_subscribed_symbols(self, websocket: WebSocket) -> Set[str]:
-        return self.symbol_subscriptions.get(websocket, set())
-
-
-manager = ConnectionManager()
+manager = ChannelConnectionManager("market")
 
 
 @router.websocket("/market")
@@ -116,7 +54,7 @@ async def websocket_market(websocket: WebSocket):
                     for symbol in symbols:
                         price = await stock_service.get_current_price(symbol)
                         if price:
-                            await manager.send_personal_message(
+                            await manager.send_personal(
                                 {
                                     "type": "price",
                                     "symbol": symbol,
@@ -141,7 +79,7 @@ async def websocket_market(websocket: WebSocket):
                 for symbol in symbols:
                     manager.subscribe_symbol(websocket, symbol)
 
-                await manager.send_personal_message(
+                await manager.send_personal(
                     {"type": "subscribed", "symbols": symbols},
                     websocket,
                 )
@@ -155,13 +93,13 @@ async def websocket_market(websocket: WebSocket):
                 for symbol in symbols:
                     manager.unsubscribe_symbol(websocket, symbol)
 
-                await manager.send_personal_message(
+                await manager.send_personal(
                     {"type": "unsubscribed", "symbols": symbols},
                     websocket,
                 )
 
             elif action == "ping":
-                await manager.send_personal_message(
+                await manager.send_personal(
                     {"type": "pong"},
                     websocket,
                 )
@@ -171,7 +109,7 @@ async def websocket_market(websocket: WebSocket):
                 symbol = message.get("symbol")
                 if symbol:
                     price = await stock_service.get_current_price(symbol)
-                    await manager.send_personal_message(
+                    await manager.send_personal(
                         {
                             "type": "price",
                             "symbol": symbol,
@@ -206,7 +144,7 @@ async def websocket_analysis(websocket: WebSocket):
             if message["type"] == "message":
                 try:
                     data = json.loads(message["data"])
-                    await manager.send_personal_message(
+                    await manager.send_personal(
                         {"type": "analysis", "data": data},
                         websocket,
                     )
@@ -223,13 +161,13 @@ async def websocket_analysis(websocket: WebSocket):
             if message.get("action") == "subscribe_symbol":
                 symbol = message.get("symbol")
                 manager.subscribe_symbol(websocket, symbol)
-                await manager.send_personal_message(
+                await manager.send_personal(
                     {"type": "subscribed", "symbol": symbol},
                     websocket,
                 )
 
             elif message.get("action") == "ping":
-                await manager.send_personal_message(
+                await manager.send_personal(
                     {"type": "pong"},
                     websocket,
                 )
@@ -260,7 +198,7 @@ async def websocket_trading(websocket: WebSocket):
             if message["type"] == "message":
                 try:
                     data = json.loads(message["data"])
-                    await manager.send_personal_message(
+                    await manager.send_personal(
                         {"type": "trading", "data": data},
                         websocket,
                     )
@@ -275,7 +213,7 @@ async def websocket_trading(websocket: WebSocket):
             message = json.loads(data)
 
             if message.get("type") == "ping":
-                await manager.send_personal_message(
+                await manager.send_personal(
                     {"type": "pong"},
                     websocket,
                 )

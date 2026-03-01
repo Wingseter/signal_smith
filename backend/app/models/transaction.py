@@ -77,3 +77,21 @@ class TradingSignal(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class SignalEvent(Base):
+    """Audit trail for signal lifecycle events (gate blocks, orders, state transitions)."""
+
+    __tablename__ = "signal_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    signal_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("trading_signals.id"), nullable=True, index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(50), index=True)
+    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    action: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    details: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
