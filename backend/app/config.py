@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     # Portfolio Risk Management (Phase 1)
     min_position_pct: float = 8.0          # 최소 포지션 크기 (총자산 대비 %)
     min_cash_reserve_pct: float = 5.0      # 최소 현금 보유 비율 (수수료/슬리피지 버퍼)
-    max_positions: int = 10                # 최대 보유 종목 수
+    max_positions: int = 5                 # 최대 보유 종목 수 (자산 규모별 조정: ~500만=5, ~1000만=7, 1000만+=8)
 
     # 기본 손절/익절 % (GPT 값이 없을 때 fallback)
     stop_loss_percent: float = 5.0
