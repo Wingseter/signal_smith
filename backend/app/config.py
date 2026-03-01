@@ -54,10 +54,13 @@ class Settings(BaseSettings):
     anthropic_base_url: Optional[str] = None
     anthropic_model: str = "claude-3-opus-20240229"
 
-    # Google Gemini
+    # Google Gemini (뉴스 분석용 — Google API 직접, rate limit 없음)
     google_api_key: Optional[str] = None
     google_base_url: Optional[str] = None
     gemini_model: str = "gemini-pro"
+
+    # Gemini Council (AI 회의용 — CLIProxiAPI, Pro 모델)
+    gemini_council_model: str = "gemini-2.5-pro"
 
     # News API
     news_api_key: Optional[str] = None

@@ -17,11 +17,11 @@ from app.config import settings
 
 
 class GeminiNewsAgent:
-    """Gemini-based agent for news and sentiment analysis (OpenAI compatible)."""
+    """Gemini-based agent for council analysis (via CLIProxiAPI)."""
 
     def __init__(self):
-        self.model_name = settings.gemini_model
-        self.api_key = settings.google_api_key
+        self.model_name = settings.gemini_council_model
+        self.api_key = settings.openai_api_key  # CLIProxiAPI 공유 키
         self._client = None
 
     def _get_client(self):
@@ -29,7 +29,7 @@ class GeminiNewsAgent:
         if self._client is None and self.api_key:
             self._client = AsyncOpenAI(
                 api_key=self.api_key,
-                base_url=settings.google_base_url or "https://generativelanguage.googleapis.com/v1beta/openai",
+                base_url=settings.openai_base_url,
             )
         return self._client
 
