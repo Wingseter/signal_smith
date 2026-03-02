@@ -11,7 +11,12 @@ def run_async(coro):
 
     Uses asyncio.run() which creates a fresh event loop per call,
     avoiding loop reuse/pollution across Celery worker threads.
+
+    Resets the global async Redis client before each call because
+    asyncio.run() destroys the previous loop, leaving stale connections.
     """
+    import app.core.redis as redis_module
+    redis_module.redis_client = None
     return asyncio.run(coro)
 
 
