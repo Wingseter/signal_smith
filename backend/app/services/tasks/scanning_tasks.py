@@ -373,8 +373,8 @@ async def _check_buy_signals_for_council(results) -> int:
                 if not await kiwoom_client.is_connected():
                     await kiwoom_client.connect()
                 balance = await kiwoom_client.get_balance()
-                if balance.available_amount > 0:
-                    available_amount = min(balance.available_amount, 5000000)
+                if balance.total_deposit > 0:
+                    available_amount = min(balance.total_deposit, 5000000)
             except Exception as e:
                 logger.warning(f"잔고 조회 실패, 기본값 사용: {e}")
 
