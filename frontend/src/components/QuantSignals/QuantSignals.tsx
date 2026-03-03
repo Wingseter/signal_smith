@@ -39,7 +39,7 @@ function getActionBadge(action: string) {
   const map: Record<string, { label: string; className: string }> = {
     strong_buy: { label: '강력 매수', className: 'bg-green-600 text-white' },
     buy: { label: '매수', className: 'bg-green-100 text-green-800' },
-    hold: { label: '보유', className: 'bg-gray-100 text-gray-700' },
+    hold: { label: '보류', className: 'bg-gray-100 text-gray-700' },
     sell: { label: '매도', className: 'bg-red-100 text-red-800' },
     strong_sell: { label: '강력 매도', className: 'bg-red-600 text-white' },
   };

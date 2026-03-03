@@ -724,7 +724,7 @@ export default function Dashboard() {
                             : 'bg-gray-100 text-gray-800'
                         }`}
                       >
-                        {signal.signal_type === 'buy' ? '매수' : signal.signal_type === 'sell' ? '매도' : '보유'}
+                        {signal.signal_type === 'buy' ? '매수' : signal.signal_type === 'sell' ? '매도' : '보류'}
                       </span>
                       <span className="font-bold text-gray-900">{signal.symbol}</span>
                     </div>

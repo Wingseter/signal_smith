@@ -499,7 +499,7 @@ export default function TradingSignals() {
                             : 'bg-gray-100 text-gray-800'
                         }`}
                       >
-                        {signal.signal_type === 'buy' ? '매수' : signal.signal_type === 'sell' ? '매도' : '보유'}
+                        {signal.signal_type === 'buy' ? '매수' : signal.signal_type === 'sell' ? '매도' : '보류'}
                       </span>
                       <h3 className="text-lg font-bold text-gray-900">{signal.symbol}</h3>
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${getRiskBadgeClass(signal.risk_level)}`}>

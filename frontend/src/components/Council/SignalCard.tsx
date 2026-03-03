@@ -42,7 +42,7 @@ export function SignalCard({
           <div className="text-white">
             <div className="flex items-center space-x-2">
               <span className="text-2xl font-bold">
-                {signal.action === 'BUY' ? '📈 매수' : signal.action === 'SELL' ? '📉 매도' : '📊 보유'}
+                {signal.action === 'BUY' ? '📈 매수' : signal.action === 'SELL' ? '📉 매도' : '📊 보류'}
               </span>
             </div>
             <h3 className="text-xl font-bold mt-1">{signal.company_name}</h3>

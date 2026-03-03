@@ -92,10 +92,16 @@ export function AccountHoldingsPanel() {
 
       {/* 계좌 잔고 카드 */}
       {balance && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4">
           <div className="bg-gray-50 rounded-lg p-3 text-center">
             <p className="text-xs text-gray-500 mb-1">예수금</p>
             <p className="text-lg font-bold text-gray-800">
+              {(balance.total_deposit / 10000).toLocaleString()}만원
+            </p>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-3 text-center">
+            <p className="text-xs text-gray-500 mb-1">주문가능</p>
+            <p className="text-lg font-bold text-blue-600">
               {(balance.available_amount / 10000).toLocaleString()}만원
             </p>
           </div>
