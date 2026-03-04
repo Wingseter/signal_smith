@@ -41,6 +41,13 @@ def scan_signals(self):
 
     try:
         symbols = _load_scan_universe(limit=500)
+        symbols = _merge_holdings_into_scan_universe(symbols)
+        if len(symbols) < 200:
+            logger.warning(
+                "Scan universe unusually small: %d symbols. "
+                "Check refresh_stock_universe status.",
+                len(symbols),
+            )
         logger.info(f"Signal scan starting: {len(symbols)} symbols")
 
         from app.services.signals import signal_scanner
@@ -178,6 +185,37 @@ def _load_scan_universe(limit: int = 500) -> List[str]:
 
     logger.warning("Using fallback symbol list")
     return FALLBACK_SYMBOLS
+
+
+def _merge_holdings_into_scan_universe(symbols: List[str]) -> List[str]:
+    """보유 종목은 유니버스 이상 상태에서도 스캔 대상에 강제 포함."""
+    try:
+        holding_symbols = run_async(_get_holding_symbols())
+    except Exception as e:
+        logger.warning(f"Failed to load holding symbols for scan merge: {e}")
+        return symbols
+
+    if not holding_symbols:
+        return symbols
+
+    missing = [s for s in holding_symbols if s not in symbols]
+    if missing:
+        logger.warning(
+            "Added %d held symbols missing from scan universe: %s",
+            len(missing),
+            ",".join(missing),
+        )
+
+    return list(dict.fromkeys(symbols + holding_symbols))
+
+
+async def _get_holding_symbols() -> List[str]:
+    from .monitoring_tasks import _get_cached_holdings
+
+    holdings = await _get_cached_holdings()
+    if not holdings:
+        return []
+    return [h.symbol for h in holdings if getattr(h, "quantity", 0) > 0]
 
 
 async def _get_cached_universe() -> Optional[str]:

@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 # ── Sell-monitoring cooldown (seconds) ──
 SELL_COOLDOWN_SECONDS = 1800
+# 5분 주기 정기 GPT 매도 리뷰 쿨다운(수동 실행 중복 방지)
+GPT_REVIEW_COOLDOWN_SECONDS = 240
 
 
 @celery_app.task(
@@ -120,7 +122,7 @@ def monitor_signals(self):
     soft_time_limit=270,
 )
 def monitor_holdings_sell(self):
-    """Monitor holdings for sell triggers (price-based)."""
+    """Monitor holdings for sell triggers and periodic GPT sell review."""
     if not is_market_hours():
         logger.info("Market is closed. Skipping holdings sell monitor.")
         return {"status": "skipped", "reason": "market_closed"}
@@ -135,38 +137,83 @@ def monitor_holdings_sell(self):
         logger.info(f"Monitoring {len(holdings)} holdings for sell triggers")
 
         triggered = []
+        gpt_reviews = []
+        gpt_triggered = []
         for holding in holdings:
-            if run_async(_check_sell_cooldown(holding.symbol)):
+            # 1) 즉시 리스크(가격/기술) 트리거는 기존 쿨다운 유지
+            if not run_async(_check_sell_cooldown(holding.symbol)):
+                result = run_async(_evaluate_price_triggers(holding))
+                if result:
+                    trigger_type, sell_reason = result
+                    run_async(_set_sell_cooldown(holding.symbol, ttl=SELL_COOLDOWN_SECONDS))
+
+                    from app.services.council.orchestrator import council_orchestrator
+
+                    meeting = run_async(
+                        council_orchestrator.start_sell_meeting(
+                            symbol=holding.symbol,
+                            company_name=holding.name,
+                            sell_reason=sell_reason,
+                            current_holdings=holding.quantity,
+                            avg_buy_price=holding.avg_price,
+                            current_price=holding.current_price,
+                        )
+                    )
+
+                    triggered.append({
+                        "symbol": holding.symbol,
+                        "name": holding.name,
+                        "trigger_type": trigger_type,
+                        "reason": sell_reason,
+                        "meeting_id": meeting.id if meeting else None,
+                    })
+                    logger.info(
+                        f"Sell trigger fired: {holding.symbol} ({holding.name}) "
+                        f"- {trigger_type}: {sell_reason}"
+                    )
+                    # 즉시 매도 회의가 열린 경우, 이번 사이클 GPT 정기 리뷰는 생략
+                    continue
+
+            # 2) 5분 주기 GPT 정기 리뷰: 매도 추천일 때만 회의 소집
+            if run_async(_check_gpt_review_cooldown(holding.symbol)):
                 continue
 
-            result = run_async(_evaluate_price_triggers(holding))
-            if result:
-                trigger_type, sell_reason = result
-                run_async(_set_sell_cooldown(holding.symbol, ttl=SELL_COOLDOWN_SECONDS))
+            review = run_async(_evaluate_gpt_sell_review(holding))
+            run_async(_set_gpt_review_cooldown(holding.symbol, ttl=GPT_REVIEW_COOLDOWN_SECONDS))
+            if not review:
+                continue
 
+            score = review.get("score")
+            recommend_sell = bool(review.get("recommend_sell", False))
+            gpt_reviews.append({
+                "symbol": holding.symbol,
+                "name": holding.name,
+                "score": score,
+                "recommend_sell": recommend_sell,
+            })
+
+            if recommend_sell:
                 from app.services.council.orchestrator import council_orchestrator
 
                 meeting = run_async(
                     council_orchestrator.start_sell_meeting(
                         symbol=holding.symbol,
                         company_name=holding.name,
-                        sell_reason=sell_reason,
+                        sell_reason=f"정기 GPT 매도 리뷰(5분): score={score}/10",
                         current_holdings=holding.quantity,
                         avg_buy_price=holding.avg_price,
                         current_price=holding.current_price,
                     )
                 )
-
-                triggered.append({
+                gpt_triggered.append({
                     "symbol": holding.symbol,
                     "name": holding.name,
-                    "trigger_type": trigger_type,
-                    "reason": sell_reason,
+                    "score": score,
                     "meeting_id": meeting.id if meeting else None,
                 })
                 logger.info(
-                    f"Sell trigger fired: {holding.symbol} ({holding.name}) "
-                    f"- {trigger_type}: {sell_reason}"
+                    f"Periodic GPT sell trigger: {holding.symbol} ({holding.name}) "
+                    f"- score={score}/10"
                 )
 
         return {
@@ -174,6 +221,10 @@ def monitor_holdings_sell(self):
             "monitored": len(holdings),
             "triggered": len(triggered),
             "details": triggered,
+            "gpt_reviewed": len(gpt_reviews),
+            "gpt_sell_triggered": len(gpt_triggered),
+            "gpt_details": gpt_reviews,
+            "gpt_trigger_details": gpt_triggered,
         }
 
     except Exception as e:
@@ -297,6 +348,41 @@ async def _set_sell_cooldown(symbol: str, ttl: int = SELL_COOLDOWN_SECONDS):
 
     redis = await get_redis()
     await redis.setex(f"sell_monitor:cooldown:{symbol}", ttl, "1")
+
+
+async def _check_gpt_review_cooldown(symbol: str) -> bool:
+    from app.core.redis import get_redis
+
+    redis = await get_redis()
+    return await redis.exists(f"sell_monitor:gpt_review:{symbol}") > 0
+
+
+async def _set_gpt_review_cooldown(symbol: str, ttl: int = GPT_REVIEW_COOLDOWN_SECONDS):
+    from app.core.redis import get_redis
+
+    redis = await get_redis()
+    await redis.setex(f"sell_monitor:gpt_review:{symbol}", ttl, "1")
+
+
+async def _evaluate_gpt_sell_review(holding):
+    """정기 GPT 매도 리뷰(퀀트 기반) 결과 반환."""
+    try:
+        from app.services.council.orchestrator import council_orchestrator
+
+        prev_stop, prev_target = _get_active_signal_prices(holding.symbol)
+
+        return await council_orchestrator.start_rebalance_review(
+            symbol=holding.symbol,
+            company_name=holding.name,
+            current_holdings=holding.quantity,
+            avg_buy_price=holding.avg_price,
+            current_price=holding.current_price,
+            prev_target_price=int(prev_target) if prev_target else None,
+            prev_stop_loss=int(prev_stop) if prev_stop else None,
+        )
+    except Exception as e:
+        logger.warning(f"Periodic GPT sell review failed for {holding.symbol}: {e}")
+        return None
 
 
 async def _evaluate_price_triggers(holding):

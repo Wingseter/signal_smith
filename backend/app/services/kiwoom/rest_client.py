@@ -631,6 +631,8 @@ class KiwoomRestClient(KiwoomBaseClient):
                 return 0.0
 
         total_deposit = 0
+        d1_estimated_deposit = 0
+        d2_estimated_deposit = 0
         available_amount = 0
         total_purchase = 0
         total_evaluation = 0
@@ -644,7 +646,7 @@ class KiwoomRestClient(KiwoomBaseClient):
                 "/api/dostk/acnt",
                 data={
                     "trnm": "kt00001",
-                    "qry_tp": "2",  # 조회구분: 2-일반조회, 3-추정조회
+                    "qry_tp": "3",  # 조회구분: 2-일반조회, 3-추정조회
                 },
                 api_id="kt00001"
             )
@@ -654,10 +656,23 @@ class KiwoomRestClient(KiwoomBaseClient):
             if result.get("return_code") == 0:
                 # kt00001 응답 필드명
                 # entr: 예수금
+                # d1_entra: D+1 추정예수금
+                # d2_entra: D+2 추정예수금
                 # ord_alow_amt: 주문가능금액
-                total_deposit = parse_int(result.get("entr"))
+                entr_amount = parse_int(result.get("entr"))
+                d1_estimated_deposit = parse_int(result.get("d1_entra"))
+                d2_estimated_deposit = parse_int(result.get("d2_entra"))
                 available_amount = parse_int(result.get("ord_alow_amt"))
-                logger.info(f"kt00001 - 예수금: {total_deposit}, 주문가능: {available_amount}")
+                # 일반 예수금(entr)과 D+1/D+2 추정예수금 중 가장 큰 값을 예수금 기준으로 사용
+                total_deposit = max(entr_amount, d1_estimated_deposit, d2_estimated_deposit)
+                logger.info(
+                    "kt00001 - 예수금(entr): %s, D+1추정(d1_entra): %s, D+2추정(d2_entra): %s, 주문가능: %s, 적용예수금: %s",
+                    entr_amount,
+                    d1_estimated_deposit,
+                    d2_estimated_deposit,
+                    available_amount,
+                    total_deposit,
+                )
             else:
                 logger.warning(f"kt00001 조회 실패: {result.get('return_msg')}")
 
@@ -1024,14 +1039,15 @@ class KiwoomRestClient(KiwoomBaseClient):
         """시장별 종목 리스트 (ka10101 - 업종코드 리스트)"""
         try:
             # 시장코드: 0-코스피, 10-코스닥
-            mrkt_cd = "0" if market.upper() == "KOSPI" else "10"
+            mrkt_tp = "0" if market.upper() == "KOSPI" else "10"
 
             result = await self._request(
                 "POST",
                 "/api/dostk/stkinfo",
                 data={
                     "trnm": "ka10101",
-                    "mrkt_cd": mrkt_cd,
+                    # ka10101 필수 파라미터는 mrkt_tp
+                    "mrkt_tp": mrkt_tp,
                 },
                 api_id="ka10101"
             )
