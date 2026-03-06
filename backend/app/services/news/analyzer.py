@@ -4,6 +4,7 @@
 실시간 뉴스 분석을 위한 빠른 Gemini 기반 분석기
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -77,15 +78,17 @@ class NewsAnalyzer:
         if self._initialized:
             return
 
-        if not settings.google_api_key:
-            raise ValueError("GOOGLE_API_KEY가 설정되지 않았습니다")
+        if not settings.openai_api_key:
+            raise ValueError("OPENAI_API_KEY(CLIProxiAPI)가 설정되지 않았습니다")
 
         self._client = AsyncOpenAI(
-            api_key=settings.google_api_key,
-            base_url=settings.google_base_url or "https://generativelanguage.googleapis.com/v1beta/openai",
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
         )
+        self._model = settings.gemini_council_model  # primary: gemini-3.1-pro-preview
+        self._fallback_model = settings.gemini_fallback_model  # fallback: gemini-3.1-pro-high
         self._initialized = True
-        logger.info(f"Gemini 분석기 초기화 완료 (모델: {settings.gemini_model})")
+        logger.info(f"Gemini 분석기 초기화 완료 (모델: {self._model}, fallback: {self._fallback_model})")
 
     def _score_to_sentiment(self, score: int) -> NewsSentiment:
         """점수를 감성으로 변환"""
@@ -241,12 +244,26 @@ class NewsAnalyzer:
                 content=content[:500]  # 토큰 절약
             )
 
-            response = await self._client.chat.completions.create(
-                model=settings.gemini_model,
-                max_tokens=4096,
-                temperature=0.3,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            try:
+                response = await self._client.chat.completions.create(
+                    model=self._model,
+                    max_tokens=4096,
+                    temperature=0.3,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                await asyncio.sleep(2)  # rate limit throttle
+            except Exception as api_err:
+                if "429" in str(api_err) or "rate" in str(api_err).lower():
+                    logger.warning(f"Rate limit hit, falling back to {self._fallback_model}")
+                    response = await self._client.chat.completions.create(
+                        model=self._fallback_model,
+                        max_tokens=4096,
+                        temperature=0.3,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    await asyncio.sleep(2)  # rate limit throttle
+                else:
+                    raise
 
             response_text = response.choices[0].message.content
             parsed = self._parse_response(response_text)

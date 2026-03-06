@@ -59,3 +59,5 @@ async def call_analyst_with_timeout(
             data=fallback_data or {},
         )
         return fallback_msg, False
+    finally:
+        await asyncio.sleep(2)  # rate limit throttle for Google/Antigravity providers

@@ -61,6 +61,7 @@ class Settings(BaseSettings):
 
     # Gemini Council (AI 회의용 — CLIProxiAPI, Pro 모델)
     gemini_council_model: str = "gemini-3.1-pro-preview"
+    gemini_fallback_model: str = "gemini-3.1-pro-high"
 
     # News API
     news_api_key: Optional[str] = None
