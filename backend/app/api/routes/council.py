@@ -534,15 +534,26 @@ async def _get_account_summary() -> dict:
     캐시 미스 시에만 Kiwoom API를 직접 호출 (최초 로딩 / 장애 fallback).
     """
     import json
-    from datetime import datetime
+    from datetime import datetime, timedelta
     from app.core.redis import get_redis
 
     cache_key = "account:summary"
+    stale_threshold = timedelta(minutes=3)
     try:
         redis = await get_redis()
         cached = await redis.get(cache_key)
         if cached:
-            return json.loads(cached)
+            cached_data = json.loads(cached)
+            updated_at = cached_data.get("updated_at")
+            if updated_at:
+                try:
+                    cached_at = datetime.fromisoformat(updated_at)
+                    if datetime.now() - cached_at <= stale_threshold:
+                        return cached_data
+                except ValueError:
+                    pass
+            else:
+                return cached_data
     except Exception:
         pass
 
