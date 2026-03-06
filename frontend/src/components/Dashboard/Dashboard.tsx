@@ -635,8 +635,8 @@ export default function Dashboard() {
           </div>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <div>
-              <p className="text-slate-400 text-sm">예수금</p>
-              <p className="text-2xl font-bold">{(accountBalance.total_deposit ?? 0).toLocaleString()}원</p>
+              <p className="text-slate-400 text-sm">총자산</p>
+              <p className="text-2xl font-bold">{((accountBalance.total_deposit ?? 0) + (accountBalance.total_evaluation ?? 0)).toLocaleString()}원</p>
             </div>
             <div>
               <p className="text-slate-400 text-sm">주문가능</p>

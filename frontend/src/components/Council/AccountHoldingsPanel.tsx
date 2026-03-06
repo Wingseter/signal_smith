@@ -94,9 +94,9 @@ export function AccountHoldingsPanel() {
       {balance && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4">
           <div className="bg-gray-50 rounded-lg p-3 text-center">
-            <p className="text-xs text-gray-500 mb-1">예수금</p>
+            <p className="text-xs text-gray-500 mb-1">총자산</p>
             <p className="text-lg font-bold text-gray-800">
-              {(balance.total_deposit / 10000).toLocaleString()}만원
+              {((balance.total_deposit + balance.total_evaluation) / 10000).toLocaleString()}만원
             </p>
           </div>
           <div className="bg-gray-50 rounded-lg p-3 text-center">

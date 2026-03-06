@@ -257,12 +257,22 @@ async def execute_signal(action: SignalAction, current_user: User = Depends(get_
 @router.post("/meetings/manual")
 async def start_manual_meeting(request: ManualMeetingRequest, current_user: User = Depends(get_current_user)):
     """수동 회의 시작 (테스트용)"""
+    # 총자산 기준으로 available_amount 설정
+    available_amount = news_trader.config.max_position_per_stock
+    try:
+        from app.services.kiwoom.rest_client import kiwoom_client
+        balance = await kiwoom_client.get_balance()
+        total_assets = balance.total_deposit + balance.total_evaluation
+        if total_assets > 0:
+            available_amount = min(total_assets, news_trader.config.max_position_per_stock)
+    except Exception:
+        pass
     meeting = await council_orchestrator.start_meeting(
         symbol=request.symbol,
         company_name=request.company_name,
         news_title=request.news_title,
         news_score=request.news_score,
-        available_amount=news_trader.config.max_position_per_stock,
+        available_amount=available_amount,
     )
     return meeting.to_dict()
 

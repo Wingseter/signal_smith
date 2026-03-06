@@ -161,10 +161,10 @@ class NewsTrader:
                 if not await kiwoom_client.is_connected():
                     await kiwoom_client.connect()
                 balance = await kiwoom_client.get_balance()
-                if balance.total_deposit > 0:
-                    # 예수금과 종목당 상한 중 작은 값
-                    available_amount = min(balance.total_deposit, self.config.max_position_per_stock)
-                    logger.info(f"예수금: {balance.total_deposit:,}원, 종목당 상한: {self.config.max_position_per_stock:,}원 → {available_amount:,}원")
+                total_assets = balance.total_deposit + balance.total_evaluation
+                if total_assets > 0:
+                    available_amount = min(total_assets, self.config.max_position_per_stock)
+                    logger.info(f"총자산: {total_assets:,}원 (예수금 {balance.total_deposit:,}원 + 평가 {balance.total_evaluation:,}원), 종목당 상한: {self.config.max_position_per_stock:,}원 → {available_amount:,}원")
             except Exception as e:
                 logger.warning(f"잔고 조회 실패, 기본값 사용: {e}")
 
