@@ -398,6 +398,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
             fundamental_score=fundamental_score,
             news_score=news_score,
             trigger_source=trigger_source,
+            confidence=confidence,
         )
 
         # SELL 시그널 보유 여부 확인

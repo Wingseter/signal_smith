@@ -123,9 +123,11 @@ def determine_action(
     fundamental_score: int,
     news_score: int,
     trigger_source: str = "news",
+    confidence: float = 0.0,
 ) -> str:
     """투자 액션 결정 (BUY/SELL/HOLD)."""
     avg_score = (quant_score + fundamental_score) / 2
+    min_confidence = 0.73  # 최소 신뢰도 73%
 
     # SELL 조건
     if trigger_source == "news" and news_score <= 3:
@@ -140,26 +142,34 @@ def determine_action(
         logger.info(f"SELL 결정: AI 매도 권장 (비율: {final_percent}%)")
         return "SELL"
 
+    # 신뢰도 게이트 — BUY 진입 전 필수
+    if confidence < min_confidence:
+        logger.info(
+            f"HOLD 결정: 신뢰도 부족 ({confidence:.0%} < {min_confidence:.0%}), "
+            f"비율: {final_percent}%, 평균: {avg_score:.1f}"
+        )
+        return "HOLD"
+
     # 퀀트 트리거 BUY 조건 (뉴스 점수 무시)
     if trigger_source == "quant":
         if final_percent >= 10 and avg_score >= 5.5:
-            logger.info(f"BUY 결정 [퀀트]: 분석 긍정 (비율: {final_percent}%, 평균: {avg_score:.1f})")
+            logger.info(f"BUY 결정 [퀀트]: 분석 긍정 (비율: {final_percent}%, 평균: {avg_score:.1f}, 신뢰도: {confidence:.0%})")
             return "BUY"
         if final_percent >= 15 and avg_score >= 5:
-            logger.info(f"BUY 결정 [퀀트]: 높은 비율 (비율: {final_percent}%, 평균: {avg_score:.1f})")
+            logger.info(f"BUY 결정 [퀀트]: 높은 비율 (비율: {final_percent}%, 평균: {avg_score:.1f}, 신뢰도: {confidence:.0%})")
             return "BUY"
 
     # 뉴스 트리거 BUY 조건
     if final_percent >= 10 and avg_score >= 6:
-        logger.info(f"BUY 결정: 긍정적 분석 (비율: {final_percent}%, 평균: {avg_score:.1f})")
+        logger.info(f"BUY 결정: 긍정적 분석 (비율: {final_percent}%, 평균: {avg_score:.1f}, 신뢰도: {confidence:.0%})")
         return "BUY"
 
     if news_score >= 8 and avg_score >= 5:
-        logger.info(f"BUY 결정: 강한 뉴스 신호 (뉴스: {news_score}, 평균: {avg_score:.1f})")
+        logger.info(f"BUY 결정: 강한 뉴스 신호 (뉴스: {news_score}, 평균: {avg_score:.1f}, 신뢰도: {confidence:.0%})")
         return "BUY"
 
     # HOLD
-    logger.info(f"HOLD 결정: 조건 미충족 (비율: {final_percent}%, 평균: {avg_score:.1f}, 트리거: {trigger_source})")
+    logger.info(f"HOLD 결정: 조건 미충족 (비율: {final_percent}%, 평균: {avg_score:.1f}, 신뢰도: {confidence:.0%}, 트리거: {trigger_source})")
     return "HOLD"
 
 
