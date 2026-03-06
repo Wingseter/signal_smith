@@ -51,6 +51,13 @@ def _mock_orch():
     orch.auto_execute = True
     orch.min_confidence = 0.5
     orch._notify_signal = AsyncMock()
+    # Formal state interface
+    orch.iter_pending_signals = lambda: list(orch._pending_signals)
+    orch.queue_execution = lambda s: orch._queued_executions.append(s)
+    orch.add_pending_signal = lambda s: orch._pending_signals.append(s)
+    orch.add_meeting = lambda m: None
+    orch.set_queued_executions = lambda sigs: setattr(orch, '_queued_executions', sigs)
+    orch.get_queued_executions = lambda: list(orch._queued_executions)
     return orch
 
 

@@ -25,7 +25,7 @@ async def test_get_balance_prefers_d2_estimated_deposit_for_total_deposit(monkey
             }
         return {"return_code": 0}
 
-    monkeypatch.setattr(client, "_request", fake_request)
+    monkeypatch.setattr(client._http, "_request", fake_request)
 
     balance = await client.get_balance()
 
@@ -54,7 +54,7 @@ async def test_get_balance_prefers_largest_among_entr_d1_d2(monkeypatch):
             return {"return_code": 0}
         return {"return_code": 0}
 
-    monkeypatch.setattr(client, "_request", fake_request)
+    monkeypatch.setattr(client._http, "_request", fake_request)
 
     balance = await client.get_balance()
 
@@ -77,7 +77,7 @@ async def test_get_balance_uses_entr_when_d2_missing(monkeypatch):
             return {"return_code": 0}
         return {"return_code": 0}
 
-    monkeypatch.setattr(client, "_request", fake_request)
+    monkeypatch.setattr(client._http, "_request", fake_request)
 
     balance = await client.get_balance()
 

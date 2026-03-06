@@ -165,17 +165,17 @@ async def run_sell_meeting(
                     )
                 else:
                     signal.status = SignalStatus.QUEUED
-                    orch._queued_executions.append(signal)
+                    orch.queue_execution(signal)
                     logger.warning(
                         f"⚠️ 자동 매도 실패, 대기 큐 추가: {symbol} - {order_result.message}"
                     )
             except Exception as e:
                 signal.status = SignalStatus.QUEUED
-                orch._queued_executions.append(signal)
+                orch.queue_execution(signal)
                 logger.error(f"❌ 자동 매도 오류, 대기 큐 추가: {symbol} - {e}")
         else:
             signal.status = SignalStatus.QUEUED
-            orch._queued_executions.append(signal)
+            orch.queue_execution(signal)
             logger.info(f"⏳ 매도 거래 시간 대기: {symbol} - {trade_reason}")
     else:
         signal.status = SignalStatus.PENDING
@@ -202,9 +202,9 @@ async def run_sell_meeting(
     await orch._notify_meeting_update(meeting)
 
     # 저장
-    orch._meetings.append(meeting)
+    orch.add_meeting(meeting)
     if signal.status == SignalStatus.PENDING:
-        orch._pending_signals.append(signal)
+        orch.add_pending_signal(signal)
 
     await orch._notify_signal(signal)
     await orch._persist_signal_to_db(signal, trigger_source=meeting.trigger_source)

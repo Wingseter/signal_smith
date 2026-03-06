@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 async def approve_signal(orch, signal_id: str) -> Optional[InvestmentSignal]:
     """시그널 승인 — BUY/SELL이면 즉시 체결 시도 또는 대기열 추가."""
-    for signal in orch._pending_signals:
+    for signal in orch.iter_pending_signals():
         if signal.id == signal_id and signal.status == SignalStatus.PENDING:
             signal.status = SignalStatus.APPROVED
             logger.info(f"시그널 승인됨: {signal.symbol} {signal.action}")
@@ -57,19 +57,19 @@ async def approve_signal(orch, signal_id: str) -> Optional[InvestmentSignal]:
                                 f"주문 실패, 대기열에 추가: {signal.symbol} - {order_result.message}"
                             )
                             signal.status = SignalStatus.QUEUED
-                            orch._queued_executions.append(signal)
+                            orch.queue_execution(signal)
                             await update_signal_status_in_db(orch, signal)
                     except Exception as e:
                         logger.error(f"주문 오류, 대기열에 추가: {signal.symbol} - {e}")
                         signal.status = SignalStatus.QUEUED
-                        orch._queued_executions.append(signal)
+                        orch.queue_execution(signal)
                         await update_signal_status_in_db(orch, signal)
                 else:
                     logger.info(
                         f"거래 시간 외, 대기열에 추가: {signal.symbol} {signal.action} - {reason}"
                     )
                     signal.status = SignalStatus.QUEUED
-                    orch._queued_executions.append(signal)
+                    orch.queue_execution(signal)
                     await update_signal_status_in_db(orch, signal)
 
             return signal
@@ -78,7 +78,7 @@ async def approve_signal(orch, signal_id: str) -> Optional[InvestmentSignal]:
 
 async def reject_signal(orch, signal_id: str) -> Optional[InvestmentSignal]:
     """시그널 거부."""
-    for signal in orch._pending_signals:
+    for signal in orch.iter_pending_signals():
         if signal.id == signal_id and signal.status == SignalStatus.PENDING:
             signal.status = SignalStatus.REJECTED
             logger.info(f"시그널 거부됨: {signal.symbol}")
@@ -89,12 +89,12 @@ async def reject_signal(orch, signal_id: str) -> Optional[InvestmentSignal]:
 
 async def execute_signal(orch, signal_id: str) -> Optional[InvestmentSignal]:
     """시그널 체결 (실제 주문 실행)."""
-    for signal in orch._pending_signals:
+    for signal in orch.iter_pending_signals():
         if signal.id == signal_id and signal.status == SignalStatus.APPROVED:
             can_trade, reason = trading_hours.can_execute_order()
             if not can_trade and orch.respect_trading_hours:
                 logger.warning(f"거래 시간이 아님: {reason} - 대기 큐에 추가")
-                orch._queued_executions.append(signal)
+                orch.queue_execution(signal)
                 return signal
 
             try:
@@ -150,7 +150,7 @@ async def process_queued_executions(orch) -> List[InvestmentSignal]:
     except Exception as e:
         logger.warning(f"잔고 조회 실패, 잔고 체크 없이 진행: {e}")
 
-    for signal in orch._queued_executions:
+    for signal in orch.get_queued_executions():
         if signal.status in (SignalStatus.QUEUED, SignalStatus.PENDING, SignalStatus.APPROVED):
             if signal.action == "BUY" and available_balance is not None:
                 if available_balance < signal.suggested_amount:
@@ -198,7 +198,7 @@ async def process_queued_executions(orch) -> List[InvestmentSignal]:
         else:
             remaining.append(signal)
 
-    orch._queued_executions = remaining
+    orch.set_queued_executions(remaining)
     return executed
 
 
@@ -281,20 +281,20 @@ async def restore_pending_signals(orch) -> None:
             original_status = s.get("signal_status", "")
             if original_status == "queued":
                 signal.status = SignalStatus.QUEUED
-                orch._queued_executions.append(signal)
+                orch.queue_execution(signal)
                 restored_queued += 1
             elif original_status == "pending":
                 signal.status = SignalStatus.PENDING
-                orch._pending_signals.append(signal)
+                orch.add_pending_signal(signal)
                 restored_pending += 1
             else:
                 if orch.auto_execute and confidence >= orch.min_confidence:
                     signal.status = SignalStatus.QUEUED
-                    orch._queued_executions.append(signal)
+                    orch.queue_execution(signal)
                     restored_queued += 1
                 else:
                     signal.status = SignalStatus.PENDING
-                    orch._pending_signals.append(signal)
+                    orch.add_pending_signal(signal)
                     restored_pending += 1
 
         if restored_queued or restored_pending:
