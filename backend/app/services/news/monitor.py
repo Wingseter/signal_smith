@@ -268,9 +268,16 @@ class NewsMonitor:
         return articles
 
     async def _poll_news(self):
-        """뉴스 폴링 루프"""
+        """뉴스 폴링 루프 (장 시간에만 크롤링)"""
+        from app.services.council.trading_hours import trading_hours, MarketSession
+
         while self._running:
             try:
+                session = trading_hours.get_market_session()
+                if session == MarketSession.CLOSED:
+                    await asyncio.sleep(self._poll_interval)
+                    continue
+
                 # 메인 뉴스 크롤링
                 articles = await self.fetch_main_news()
 
