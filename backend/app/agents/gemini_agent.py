@@ -11,35 +11,23 @@ from typing import Optional, List
 from datetime import datetime
 import json
 
-from openai import AsyncOpenAI
-
 from app.config import settings
+from app.agents.base_agent import BaseLLMAgent
 
 
-class GeminiNewsAgent:
+class GeminiNewsAgent(BaseLLMAgent):
     """Gemini-based agent for council analysis (via CLIProxiAPI)."""
 
     def __init__(self):
-        self.model_name = settings.gemini_council_model
-        self.api_key = settings.openai_api_key  # CLIProxiAPI 공유 키
-        self._client = None
+        super().__init__(
+            model_name=settings.gemini_council_model,
+            api_key=settings.openai_api_key,  # CLIProxiAPI 공유 키
+            base_url=settings.openai_base_url,
+        )
 
-    def _get_client(self):
-        """Lazy initialization of OpenAI-compatible client (via CLIProxiAPI)."""
-        if self._client is None and self.api_key:
-            self._client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=settings.openai_base_url,
-            )
-        return self._client
-
-    def _parse_json_response(self, text: str) -> dict:
-        """Parse JSON from response, handling markdown code blocks."""
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        return json.loads(text.strip())
+    def _create_client(self):
+        from openai import AsyncOpenAI
+        return AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
     async def analyze(
         self,

@@ -94,7 +94,7 @@ class ThemeDetailResponse(BaseModel):
 
 
 @router.get("/list")
-async def list_sectors(
+def list_sectors(
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -111,7 +111,7 @@ async def list_sectors(
 
 
 @router.get("/performance", response_model=List[SectorResponse])
-async def get_sector_performance(
+def get_sector_performance(
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> List[SectorResponse]:
@@ -125,7 +125,7 @@ async def get_sector_performance(
     for sector_info in KOREAN_SECTORS.values():
         all_symbols.update(sector_info.get("symbols", []))
 
-    price_data = await _fetch_price_data(list(all_symbols), 90, db)
+    price_data = _fetch_price_data(list(all_symbols), 90, db)
 
     # Analyze sectors
     performances = analyzer.analyze_sectors(price_data)
@@ -152,7 +152,7 @@ async def get_sector_performance(
 
 
 @router.get("/sector/{sector_id}", response_model=SectorDetailResponse)
-async def get_sector_detail(
+def get_sector_detail(
     sector_id: str,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -186,7 +186,7 @@ async def get_sector_detail(
             })
 
     # Calculate sector performance
-    price_data = await _fetch_price_data(symbols, 60, db)
+    price_data = _fetch_price_data(symbols, 60, db)
     analyzer = SectorAnalyzer()
     performances = analyzer.analyze_sectors(price_data)
 
@@ -216,7 +216,7 @@ async def get_sector_detail(
 
 
 @router.get("/themes", response_model=List[ThemeResponse])
-async def get_themes_performance(
+def get_themes_performance(
     hot_only: bool = False,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -231,7 +231,7 @@ async def get_themes_performance(
     for theme_info in INVESTMENT_THEMES.values():
         all_symbols.update(theme_info.get("symbols", []))
 
-    price_data = await _fetch_price_data(list(all_symbols), 60, db)
+    price_data = _fetch_price_data(list(all_symbols), 60, db)
 
     # Analyze themes
     performances = analyzer.analyze_themes(price_data)
@@ -258,7 +258,7 @@ async def get_themes_performance(
 
 
 @router.get("/theme/{theme_id}", response_model=ThemeDetailResponse)
-async def get_theme_detail(
+def get_theme_detail(
     theme_id: str,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -291,7 +291,7 @@ async def get_theme_detail(
             })
 
     # Calculate theme performance
-    price_data = await _fetch_price_data(symbols, 60, db)
+    price_data = _fetch_price_data(symbols, 60, db)
     analyzer = SectorAnalyzer()
     performances = analyzer.analyze_themes(price_data)
 
@@ -319,7 +319,7 @@ async def get_theme_detail(
 
 
 @router.get("/rotation")
-async def detect_rotation_signal(
+def detect_rotation_signal(
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> RotationSignalResponse:
@@ -333,7 +333,7 @@ async def detect_rotation_signal(
     for sector_info in KOREAN_SECTORS.values():
         all_symbols.update(sector_info.get("symbols", []))
 
-    price_data = await _fetch_price_data(list(all_symbols), 120, db)
+    price_data = _fetch_price_data(list(all_symbols), 120, db)
 
     # Analyze current sectors
     current_performance = analyzer.analyze_sectors(price_data)
@@ -366,7 +366,7 @@ async def detect_rotation_signal(
 
 
 @router.get("/recommended")
-async def get_recommended_sectors(
+def get_recommended_sectors(
     cycle_phase: Optional[str] = None,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -382,7 +382,7 @@ async def get_recommended_sectors(
         for sector_info in KOREAN_SECTORS.values():
             all_symbols.update(sector_info.get("symbols", []))
 
-        price_data = await _fetch_price_data(list(all_symbols), 60, db)
+        price_data = _fetch_price_data(list(all_symbols), 60, db)
         performances = analyzer.analyze_sectors(price_data)
         cycle = analyzer._estimate_cycle_phase(performances)
     else:
@@ -410,7 +410,7 @@ async def get_recommended_sectors(
 
 
 @router.get("/correlation")
-async def get_sector_correlation(
+def get_sector_correlation(
     period_days: int = Query(60, ge=20, le=252),
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -424,7 +424,7 @@ async def get_sector_correlation(
     for sector_info in KOREAN_SECTORS.values():
         all_symbols.update(sector_info.get("symbols", []))
 
-    price_data = await _fetch_price_data(list(all_symbols), period_days, db)
+    price_data = _fetch_price_data(list(all_symbols), period_days, db)
 
     correlation_df = analyzer.calculate_sector_correlation(price_data, period_days)
 
@@ -449,7 +449,7 @@ async def get_sector_correlation(
 
 
 @router.get("/search")
-async def search_by_keyword(
+def search_by_keyword(
     keyword: str,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -468,7 +468,7 @@ async def search_by_keyword(
 
 
 @router.get("/heatmap")
-async def get_sector_heatmap(
+def get_sector_heatmap(
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -481,7 +481,7 @@ async def get_sector_heatmap(
     for sector_info in KOREAN_SECTORS.values():
         all_symbols.update(sector_info.get("symbols", []))
 
-    price_data = await _fetch_price_data(list(all_symbols), 60, db)
+    price_data = _fetch_price_data(list(all_symbols), 60, db)
     performances = analyzer.analyze_sectors(price_data)
 
     heatmap_data = []
@@ -499,7 +499,7 @@ async def get_sector_heatmap(
     return {"data": heatmap_data}
 
 
-async def _fetch_price_data(
+def _fetch_price_data(
     symbols: List[str],
     days: int,
     db: Session,

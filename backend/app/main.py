@@ -12,9 +12,10 @@ from app.api.routes import (
 )
 from app.api.websocket.handler import router as ws_router
 from app.config import settings
-from app.core.database import init_db
+from app.core.database import engine, sync_engine, init_db
 from app.core.exceptions import SignalSmithError
 from app.core.logging_config import configure_logging
+from app.core.redis import get_redis, close_redis
 
 configure_logging(
     json_output=settings.is_production,
@@ -34,6 +35,12 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Shutdown: release connections
+    logger.info("Shutting down — releasing connections")
+    await close_redis()
+    await engine.dispose()
+    sync_engine.dispose()
+
 
 app = FastAPI(
     title=settings.app_name,
@@ -51,7 +58,7 @@ app = FastAPI(
 async def signal_smith_error_handler(request: Request, exc: SignalSmithError):
     logger.error("SignalSmithError [%s]: %s", exc.code, exc.message, exc_info=True)
     return JSONResponse(
-        status_code=500,
+        status_code=exc.http_status_code,
         content={"error": exc.code, "detail": exc.message},
     )
 
@@ -89,6 +96,9 @@ app.include_router(optimizer.router, prefix="/api/v1/optimizer", tags=["Portfoli
 app.include_router(sectors.router, prefix="/api/v1/sectors", tags=["Sector Analysis"])
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(council.router, prefix="/api/v1/council", tags=["AI Council"])
+if settings.debug:
+    from app.api.routes import council_test
+    app.include_router(council_test.router, prefix="/api/v1/council", tags=["AI Council Test"])
 app.include_router(news_monitor.router, prefix="/api/v1/news-monitor", tags=["News Monitor"])
 app.include_router(signals.router, prefix="/api/v1/signals", tags=["Quant Signals"])
 app.include_router(ws_router, prefix="/ws", tags=["WebSocket"])
@@ -105,4 +115,29 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    checks: dict = {}
+
+    # DB check
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception as exc:
+        checks["db"] = str(exc)
+
+    # Redis check
+    try:
+        redis = await get_redis()
+        await redis.ping()
+        checks["redis"] = "ok"
+    except Exception as exc:
+        checks["redis"] = str(exc)
+
+    all_ok = all(v == "ok" for v in checks.values())
+    return JSONResponse(
+        status_code=200 if all_ok else 503,
+        content={
+            "status": "healthy" if all_ok else "degraded",
+            "checks": checks,
+        },
+    )

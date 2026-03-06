@@ -119,32 +119,18 @@ def refresh_account_summary(self):
 
 async def _refresh_account_summary_async() -> dict:
     """키움 API로 balance + holdings 조회 → Redis 캐시 갱신."""
-    from app.core.redis import get_redis
-    from app.services.trading_service import trading_service
+    from app.services.account_service import account_service
 
     try:
-        balance = await trading_service.get_account_balance()
-        holdings = await trading_service.get_holdings()
+        result = await account_service.refresh_summary()
+        return {
+            "status": "success",
+            "holdings_count": result["count"],
+            "updated_at": result["updated_at"],
+        }
     except Exception as e:
-        logger.warning(f"키움 API 호출 실패 (account summary refresh): {e}")
+        logger.warning(f"Account summary refresh failed: {e}")
         return {"status": "error", "reason": str(e)}
-
-    updated_at = datetime.now().isoformat()
-    result = {
-        "balance": balance,
-        "holdings": holdings,
-        "count": len(holdings),
-        "updated_at": updated_at,
-    }
-
-    try:
-        redis = await get_redis()
-        await redis.set("account:summary", json.dumps(result), ex=90)
-        logger.debug(f"Account summary cached: {len(holdings)} holdings, updated_at={updated_at}")
-    except Exception as e:
-        logger.warning(f"Redis 캐시 저장 실패 (account summary): {e}")
-
-    return {"status": "success", "holdings_count": len(holdings), "updated_at": updated_at}
 
 
 def _load_scan_universe(limit: int = 500) -> List[str]:

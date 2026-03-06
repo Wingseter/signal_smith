@@ -187,7 +187,7 @@ async def get_strategies(
 
 
 @router.post("/run", response_model=BacktestResponse)
-async def run_backtest(
+def run_backtest(
     request: BacktestRequest,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -237,7 +237,7 @@ async def run_backtest(
                 setattr(config, key, value)
 
     # Fetch historical data for symbols
-    data = await _fetch_historical_data(request.symbols, start_date, end_date, db)
+    data = _fetch_historical_data(request.symbols, start_date, end_date, db)
 
     if not data:
         raise HTTPException(
@@ -313,7 +313,7 @@ async def run_backtest(
 
 
 @router.post("/compare")
-async def compare_strategies(
+def compare_strategies(
     symbols: List[str],
     start_date: str,
     end_date: str,
@@ -337,7 +337,7 @@ async def compare_strategies(
     strategy_names = strategies or list(STRATEGIES.keys())
 
     # Fetch data once
-    data = await _fetch_historical_data(symbols, start, end, db)
+    data = _fetch_historical_data(symbols, start, end, db)
     if not data:
         raise HTTPException(status_code=404, detail="No data found")
 
@@ -407,7 +407,7 @@ async def compare_strategies(
 
 
 @router.get("/history")
-async def get_backtest_history(
+def get_backtest_history(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     strategy: Optional[str] = None,
@@ -472,7 +472,7 @@ async def get_backtest_history(
 
 
 @router.get("/history/{backtest_id}")
-async def get_backtest_detail(
+def get_backtest_detail(
     backtest_id: int,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -517,7 +517,7 @@ async def get_backtest_detail(
 
 
 @router.patch("/history/{backtest_id}")
-async def update_backtest(
+def update_backtest(
     backtest_id: int,
     request: UpdateBacktestRequest,
     db: Session = Depends(get_sync_db_dep),
@@ -554,7 +554,7 @@ async def update_backtest(
 
 
 @router.delete("/history/{backtest_id}")
-async def delete_backtest(
+def delete_backtest(
     backtest_id: int,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -581,7 +581,7 @@ async def delete_backtest(
 
 
 @router.get("/comparisons")
-async def get_comparison_history(
+def get_comparison_history(
     limit: int = Query(default=10, ge=1, le=50),
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -617,7 +617,7 @@ async def get_comparison_history(
     }
 
 
-async def _fetch_historical_data(
+def _fetch_historical_data(
     symbols: List[str],
     start_date: datetime,
     end_date: datetime,

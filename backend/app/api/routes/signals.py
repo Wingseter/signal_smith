@@ -12,7 +12,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Qu
 from pydantic import BaseModel
 
 from app.services.signals import signal_scanner, SignalResult
-from app.core.websocket import BaseConnectionManager
+from app.core.websocket import BaseConnectionManager, authenticate_websocket
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Quant Signals"])
@@ -72,11 +72,8 @@ async def get_results(limit: int = Query(default=50, le=200)):
 @router.get("/scan/{symbol}")
 async def scan_stock(symbol: str):
     """단일 종목 스캔"""
-    if not symbol or len(symbol) != 6 or not symbol.isdigit():
-        raise HTTPException(
-            status_code=400,
-            detail=f"유효하지 않은 종목코드: {symbol}. 6자리 숫자여야 합니다."
-        )
+    from app.core.validators import validate_symbol
+    validate_symbol(symbol)
 
     result = await signal_scanner.scan_stock(symbol)
     if not result:
@@ -128,6 +125,10 @@ async def get_top_signals(limit: int = Query(default=20, le=50)):
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """실시간 시그널 스트리밍 WebSocket"""
+    token_data = await authenticate_websocket(websocket)
+    if token_data is None:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
     await signal_manager.connect(websocket)
 
     # 초기 상태 전송

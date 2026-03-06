@@ -86,7 +86,7 @@ async def get_report_types(
 
 
 @router.post("/stock")
-async def generate_stock_report(
+def generate_stock_report(
     request: StockReportRequest,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -173,7 +173,7 @@ async def generate_stock_report(
 
 
 @router.post("/portfolio")
-async def generate_portfolio_report(
+def generate_portfolio_report(
     request: PortfolioReportRequest,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -297,7 +297,7 @@ async def generate_portfolio_report(
 
 
 @router.post("/trading")
-async def generate_trading_report(
+def generate_trading_report(
     request: TradingReportRequest,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -404,7 +404,7 @@ async def generate_trading_report(
 
 
 @router.post("/market")
-async def generate_market_report(
+def generate_market_report(
     request: MarketReportRequest,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),

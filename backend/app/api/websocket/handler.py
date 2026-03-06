@@ -15,7 +15,7 @@ from typing import Set
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.redis import get_redis
-from app.core.websocket import ChannelConnectionManager
+from app.core.websocket import ChannelConnectionManager, authenticate_websocket
 from app.services.stock_service import stock_service
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,10 @@ async def websocket_market(websocket: WebSocket):
     - 구독 확인: {"type": "subscribed", "symbols": [...]}
     - 시세 업데이트: {"type": "price", "symbol": "005930", "data": {...}}
     """
+    token_data = await authenticate_websocket(websocket)
+    if token_data is None:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
     await manager.connect(websocket, "market")
 
     # 시세 업데이트 태스크
@@ -131,6 +135,10 @@ async def websocket_analysis(websocket: WebSocket):
 
     실시간으로 AI 분석 결과를 수신합니다.
     """
+    token_data = await authenticate_websocket(websocket)
+    if token_data is None:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
     await manager.connect(websocket, "analysis")
 
     # Redis pubsub 구독
@@ -185,6 +193,10 @@ async def websocket_trading(websocket: WebSocket):
 
     주문 체결, 잔고 변경 등의 알림을 실시간으로 수신합니다.
     """
+    token_data = await authenticate_websocket(websocket)
+    if token_data is None:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
     await manager.connect(websocket, "trading")
 
     # Redis pubsub 구독

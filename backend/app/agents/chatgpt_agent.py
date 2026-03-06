@@ -12,22 +12,22 @@ from datetime import datetime
 import json
 
 from app.config import settings
+from app.agents.base_agent import BaseLLMAgent
 
 
-class ChatGPTQuantAgent:
+class ChatGPTQuantAgent(BaseLLMAgent):
     """ChatGPT-based agent for quantitative analysis."""
 
     def __init__(self):
-        self.model_name = settings.openai_model
-        self.api_key = settings.openai_api_key
-        self._client = None
+        super().__init__(
+            model_name=settings.openai_model,
+            api_key=settings.openai_api_key,
+            base_url=settings.openai_base_url,
+        )
 
-    def _get_client(self):
-        """Lazy initialization of OpenAI client."""
-        if self._client is None and self.api_key:
-            from openai import AsyncOpenAI
-            self._client = AsyncOpenAI(api_key=self.api_key, base_url=settings.openai_base_url)
-        return self._client
+    def _create_client(self):
+        from openai import AsyncOpenAI
+        return AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
     def _calculate_basic_indicators(self, price_data: List[dict]) -> Dict[str, Any]:
         """Calculate basic technical indicators from price data."""

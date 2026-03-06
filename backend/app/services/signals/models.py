@@ -109,6 +109,12 @@ class IndicatorData:
     ma_60: float = 0.0
     ma_120: float = 0.0
 
+    # RSI / MACD (council 공용)
+    rsi_14: Optional[float] = None
+    macd_line: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+
     # 추가 메타
     calculated_at: datetime = field(default_factory=datetime.now)
 
@@ -178,6 +184,12 @@ class IndicatorData:
                 "ma_20": round(self.ma_20, 0),
                 "ma_60": round(self.ma_60, 0),
                 "ma_120": round(self.ma_120, 0),
+            },
+            "momentum": {
+                "rsi_14": round(self.rsi_14, 2) if self.rsi_14 is not None else None,
+                "macd_line": self.macd_line,
+                "macd_signal": self.macd_signal,
+                "macd_histogram": self.macd_histogram,
             },
             "calculated_at": self.calculated_at.isoformat(),
         }

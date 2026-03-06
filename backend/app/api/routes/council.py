@@ -15,8 +15,8 @@ from sqlalchemy import select
 
 from app.services.news import news_trader, news_monitor
 from app.services.council import council_orchestrator, CouncilMeeting, InvestmentSignal
-from app.services.trading_service import trading_service
-from app.core.websocket import BaseConnectionManager
+from app.services.account_service import account_service
+from app.core.websocket import BaseConnectionManager, authenticate_websocket
 from app.core.database import async_session_maker
 from app.models.transaction import TradingSignal as TradingSignalModel
 from app.api.routes.auth import get_current_user
@@ -267,141 +267,6 @@ async def start_manual_meeting(request: ManualMeetingRequest, current_user: User
     return meeting.to_dict()
 
 
-@router.post("/test/analyze-news")
-async def test_analyze_news(current_user: User = Depends(get_current_user)):
-    """뉴스 크롤링 및 분석 테스트 (디버그용)"""
-    from app.services.news import news_analyzer
-
-    # 1. 뉴스 크롤링
-    articles = await news_monitor.fetch_main_news()
-
-    if not articles:
-        return {"error": "뉴스를 가져올 수 없습니다", "articles": []}
-
-    # 2. 첫 번째 뉴스 분석
-    article = articles[0]
-    analysis = await news_analyzer.analyze(article)
-
-    # 3. 회의 소집 조건 확인
-    threshold = news_trader.config.council_threshold
-    should_trigger = analysis.score >= threshold
-
-    return {
-        "total_news": len(articles),
-        "analyzed_article": {
-            "title": article.title,
-            "source": article.source,
-            "symbol": article.symbol,
-            "company_name": article.company_name,
-        },
-        "analysis_result": {
-            "score": analysis.score,
-            "sentiment": analysis.sentiment.value,
-            "confidence": analysis.confidence,
-            "trading_signal": analysis.trading_signal,
-            "reason": analysis.analysis_reason,
-            "extracted_symbol": analysis.article.symbol,
-            "extracted_company": analysis.article.company_name,
-        },
-        "council_threshold": threshold,
-        "should_trigger_council": should_trigger,
-        "config": {
-            "require_symbol": news_trader.config.require_symbol,
-            "min_confidence": news_trader.config.min_confidence,
-            "analyze_all_news": news_trader.config.analyze_all_news,
-        }
-    }
-
-
-@router.post("/test/force-council")
-async def test_force_council(current_user: User = Depends(get_current_user)):
-    """강제로 회의 소집 테스트 (종목코드가 있는 뉴스만)"""
-    from app.services.news import news_analyzer
-
-    # 1. 뉴스 크롤링
-    articles = await news_monitor.fetch_main_news()
-
-    if not articles:
-        return {"error": "뉴스를 가져올 수 없습니다", "articles": []}
-
-    # 2. 종목코드가 있는 뉴스 찾기 (최대 5개 분석)
-    for i, article in enumerate(articles[:5]):
-        analysis = await news_analyzer.analyze(article)
-
-        # 분석 결과에서 종목 정보 업데이트
-        if analysis.article.symbol:
-            article.symbol = analysis.article.symbol
-        if analysis.article.company_name:
-            article.company_name = analysis.article.company_name
-
-        # 종목코드가 있으면 회의 소집
-        if article.symbol:
-            meeting = await council_orchestrator.start_meeting(
-                symbol=article.symbol,
-                company_name=article.company_name or article.title[:20],
-                news_title=article.title,
-                news_score=analysis.score,
-                available_amount=news_trader.config.max_position_per_stock,
-            )
-
-            return {
-                "status": "council_started",
-                "articles_checked": i + 1,
-                "article": {
-                    "title": article.title,
-                    "symbol": article.symbol,
-                    "company_name": article.company_name,
-                },
-                "analysis": {
-                    "score": analysis.score,
-                    "confidence": analysis.confidence,
-                    "signal": analysis.trading_signal,
-                },
-                "meeting": meeting.to_dict(),
-            }
-
-    # 3. 종목코드 있는 뉴스 없음
-    return {
-        "error": "종목코드가 있는 뉴스를 찾을 수 없습니다. 회의 소집 불가.",
-        "articles_checked": min(5, len(articles)),
-        "hint": "뉴스에서 상장사가 언급되어야 회의가 의미있습니다.",
-    }
-
-
-@router.post("/test/mock-council")
-async def test_mock_council(symbol: str = "005930", company_name: str = "삼성전자", current_user: User = Depends(get_current_user)):
-    """알려진 종목으로 회의 소집 테스트 (디버그용)
-
-    기본값: 삼성전자 (005930)
-    예시: POST /council/test/mock-council?symbol=035420&company_name=네이버
-    """
-    # 유효한 6자리 종목코드 확인
-    if not symbol or len(symbol) != 6 or not symbol.isdigit():
-        raise HTTPException(
-            status_code=400,
-            detail=f"유효하지 않은 종목코드: {symbol}. 6자리 숫자여야 합니다."
-        )
-
-    meeting = await council_orchestrator.start_meeting(
-        symbol=symbol,
-        company_name=company_name,
-        news_title=f"[테스트] {company_name} 관련 뉴스",
-        news_score=8,  # 높은 점수로 설정
-        available_amount=news_trader.config.max_position_per_stock,
-    )
-
-    return {
-        "status": "council_started",
-        "test_mode": True,
-        "article": {
-            "title": f"[테스트] {company_name} 관련 뉴스",
-            "symbol": symbol,
-            "company_name": company_name,
-        },
-        "meeting": meeting.to_dict(),
-    }
-
-
 @router.put("/config")
 async def update_config(config: CouncilConfig, current_user: User = Depends(get_current_user)):
     """설정 업데이트"""
@@ -510,71 +375,21 @@ async def get_realized_pnl(period: str = Query(default="1m"), current_user: User
 @router.get("/account/balance")
 async def get_account_balance(current_user: User = Depends(get_current_user)):
     """키움 계좌 잔고 조회"""
-    summary = await _get_account_summary()
+    summary = await account_service.get_account_summary()
     return summary["balance"]
 
 
 @router.get("/account/holdings")
 async def get_account_holdings(current_user: User = Depends(get_current_user)):
     """키움 보유종목 조회"""
-    summary = await _get_account_summary()
+    summary = await account_service.get_account_summary()
     return {"holdings": summary["holdings"], "count": len(summary["holdings"])}
 
 
 @router.get("/account/summary")
 async def get_account_summary(current_user: User = Depends(get_current_user)):
     """계좌 잔고 + 보유종목 통합 조회 (캐시 적용)"""
-    return await _get_account_summary()
-
-
-async def _get_account_summary() -> dict:
-    """계좌 정보 통합 조회 (캐시 우선 — 백그라운드 태스크가 30초마다 갱신).
-
-    Redis 캐시가 있으면 즉시 반환하고,
-    캐시 미스 시에만 Kiwoom API를 직접 호출 (최초 로딩 / 장애 fallback).
-    """
-    import json
-    from datetime import datetime, timedelta
-    from app.core.redis import get_redis
-
-    cache_key = "account:summary"
-    stale_threshold = timedelta(minutes=3)
-    try:
-        redis = await get_redis()
-        cached = await redis.get(cache_key)
-        if cached:
-            cached_data = json.loads(cached)
-            updated_at = cached_data.get("updated_at")
-            if updated_at:
-                try:
-                    cached_at = datetime.fromisoformat(updated_at)
-                    if datetime.now() - cached_at <= stale_threshold:
-                        return cached_data
-                except ValueError:
-                    pass
-            else:
-                return cached_data
-    except Exception:
-        pass
-
-    # 캐시 미스: 직접 호출 (fallback)
-    balance = await trading_service.get_account_balance()
-    holdings = await trading_service.get_holdings()
-
-    result = {
-        "balance": balance,
-        "holdings": holdings,
-        "count": len(holdings),
-        "updated_at": datetime.now().isoformat(),
-    }
-
-    try:
-        redis = await get_redis()
-        await redis.set(cache_key, json.dumps(result), ex=90)
-    except Exception:
-        pass
-
-    return result
+    return await account_service.get_account_summary()
 
 
 @router.post("/process-queue")
@@ -598,9 +413,11 @@ async def process_queued_executions(current_user: User = Depends(get_current_use
 
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """실시간 회의 스트리밍 WebSocket
-    TODO(Phase 2): WebSocket 인증 — 토큰 기반 핸드셰이크 인증 추가 필요
-    """
+    """실시간 회의 스트리밍 WebSocket"""
+    token_data = await authenticate_websocket(websocket)
+    if token_data is None:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
     await manager.connect(websocket)
 
     # 초기 상태 전송

@@ -12,25 +12,22 @@ from datetime import datetime
 import json
 
 from app.config import settings
+from app.agents.base_agent import BaseLLMAgent
 
 
-class ClaudeFundamentalAgent:
+class ClaudeFundamentalAgent(BaseLLMAgent):
     """Claude-based agent for fundamental analysis."""
 
     def __init__(self):
-        self.model_name = settings.anthropic_model
-        self.api_key = settings.anthropic_api_key
-        self._client = None
+        super().__init__(
+            model_name=settings.anthropic_model,
+            api_key=settings.anthropic_api_key,
+            base_url=settings.anthropic_base_url or "https://api.anthropic.com/v1",
+        )
 
-    def _get_client(self):
-        """Lazy initialization of OpenAI-compatible client (via CLIProxiAPI)."""
-        if self._client is None and self.api_key:
-            from openai import AsyncOpenAI
-            self._client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=settings.anthropic_base_url or "https://api.anthropic.com/v1",
-            )
-        return self._client
+    def _create_client(self):
+        from openai import AsyncOpenAI
+        return AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
     def _format_financial_data(self, data: dict) -> str:
         """Format financial data for the prompt."""

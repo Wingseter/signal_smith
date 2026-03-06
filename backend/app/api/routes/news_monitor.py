@@ -163,48 +163,26 @@ class NewsMonitorHistory:
 monitor_history = NewsMonitorHistory()
 
 
-# ============ 원본 함수 래핑 (이력 추적용) ============
+# ============ 콜백 기반 이력 추적 ============
 
-_original_notify_callbacks = None
-_original_analyze = None
-
-
-def setup_tracking():
-    """이력 추적 설정"""
-    global _original_notify_callbacks, _original_analyze
-
-    # NewsMonitor._notify_callbacks 래핑
-    if _original_notify_callbacks is None:
-        _original_notify_callbacks = news_monitor._notify_callbacks
-
-        async def wrapped_notify_callbacks(article):
-            # 원본 콜백 실행
-            await _original_notify_callbacks(article)
-            # 이력에 추가 (트리거 뉴스)
-            monitor_history.add_crawled_news(article, is_trigger=True)
-
-        news_monitor._notify_callbacks = wrapped_notify_callbacks
-
-    # NewsAnalyzer.analyze 래핑
-    if _original_analyze is None:
-        _original_analyze = news_analyzer.analyze
-
-        async def wrapped_analyze(article):
-            result = await _original_analyze(article)
-            # 이력에 추가
-            monitor_history.add_analysis_result(result)
-            return result
-
-        news_analyzer.analyze = wrapped_analyze
+async def _on_news_trigger(article):
+    """NewsMonitor 콜백: 트리거 뉴스 이력 기록"""
+    monitor_history.add_crawled_news(article, is_trigger=True)
 
 
-# 모듈 로드 시 설정
-setup_tracking()
+async def _on_analysis_complete(result):
+    """NewsAnalyzer 콜백: 분석 결과 이력 기록"""
+    monitor_history.add_analysis_result(result)
+
+
+# 콜백 등록 (monkey-patching 대신)
+news_monitor.add_callback(_on_news_trigger)
+news_analyzer.add_analysis_callback(_on_analysis_complete)
 
 
 # ============ WebSocket Manager ============
 
-from app.core.websocket import BaseConnectionManager
+from app.core.websocket import BaseConnectionManager, authenticate_websocket
 
 ws_manager = BaseConnectionManager("news-monitor")
 
@@ -333,6 +311,10 @@ async def test_analyze(title: str = Query(...), symbol: Optional[str] = None):
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """실시간 모니터링 WebSocket"""
+    token_data = await authenticate_websocket(websocket)
+    if token_data is None:
+        await websocket.close(code=4001, reason="Authentication required")
+        return
     await ws_manager.connect(websocket)
 
     # 초기 상태 전송

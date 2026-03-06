@@ -249,15 +249,10 @@ class QuantAnalyst:
 
             # JSON 파싱 시도
             try:
-                # JSON 블록 추출
-                if "```json" in response_text:
-                    json_str = response_text.split("```json")[1].split("```")[0]
-                elif "```" in response_text:
-                    json_str = response_text.split("```")[1].split("```")[0]
-                else:
-                    json_str = response_text
-
-                data = json.loads(json_str.strip())
+                from .llm_utils import parse_llm_json
+                data, parse_err = parse_llm_json(response_text)
+                if parse_err:
+                    raise json.JSONDecodeError(parse_err, response_text, 0)
 
                 # 기술적 데이터가 있는 경우 추가 정보 포함
                 content = f"""📊 **퀀트 분석 결과**
@@ -410,14 +405,10 @@ class QuantAnalyst:
 
             # JSON 파싱
             try:
-                if "```json" in response_text:
-                    json_str = response_text.split("```json")[1].split("```")[0]
-                elif "```" in response_text:
-                    json_str = response_text.split("```")[1].split("```")[0]
-                else:
-                    json_str = response_text
-
-                data = json.loads(json_str.strip())
+                from .llm_utils import parse_llm_json
+                data, parse_err = parse_llm_json(response_text)
+                if parse_err:
+                    raise json.JSONDecodeError(parse_err, response_text, 0)
 
                 if data.get("confirm_signal", False):
                     action = data.get("action", "HOLD")

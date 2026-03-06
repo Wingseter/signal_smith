@@ -67,6 +67,8 @@ class QuantIndicatorCalculator:
         self._calc_rvol(data, volumes)
         self._calc_52w_position(data, highs, lows, closes)
         self._calc_moving_averages(data, closes)
+        self._calc_rsi(data, closes)
+        self._calc_macd(data, closes)
 
         return data
 
@@ -507,6 +509,62 @@ class QuantIndicatorCalculator:
             data.ma_60 = sum(closes[-60:]) / 60
         if n >= 120:
             data.ma_120 = sum(closes[-120:]) / 120
+
+    # ========================
+    # RSI / MACD (council 공용)
+    # ========================
+
+    def _calc_rsi(self, data: IndicatorData, closes: List[float], period: int = 14):
+        """RSI 계산 (오래된순 입력)"""
+        n = len(closes)
+        if n < period + 1:
+            return
+        # 최근 period+1 가격으로 변화량 계산
+        recent = closes[-(period + 1):]
+        changes = [recent[i + 1] - recent[i] for i in range(period)]
+        gains = [c for c in changes if c > 0]
+        losses = [-c for c in changes if c < 0]
+        avg_gain = sum(gains) / period if gains else 0
+        avg_loss = sum(losses) / period if losses else 0
+        if avg_loss == 0:
+            data.rsi_14 = 100.0
+            return
+        rs = avg_gain / avg_loss
+        data.rsi_14 = round(100 - (100 / (1 + rs)), 2)
+
+    def _calc_macd(self, data: IndicatorData, closes: List[float],
+                   fast: int = 12, slow: int = 26, signal: int = 9):
+        """MACD 계산 (오래된순 입력)"""
+        n = len(closes)
+        if n < slow + signal:
+            return
+
+        def ema_series(values: List[float], period: int) -> List[float]:
+            k = 2 / (period + 1)
+            result = [sum(values[:period]) / period]
+            for v in values[period:]:
+                result.append(v * k + result[-1] * (1 - k))
+            return result
+
+        ema_fast = ema_series(closes, fast)
+        ema_slow = ema_series(closes, slow)
+        if not ema_fast or not ema_slow:
+            return
+
+        min_len = min(len(ema_fast), len(ema_slow))
+        macd_line = [ema_fast[-(min_len - i)] - ema_slow[-(min_len - i)] for i in range(min_len)]
+
+        if len(macd_line) < signal:
+            return
+
+        signal_line = ema_series(macd_line, signal)
+        if not signal_line:
+            data.macd_line = round(macd_line[-1], 2)
+            return
+
+        data.macd_line = round(macd_line[-1], 2)
+        data.macd_signal = round(signal_line[-1], 2)
+        data.macd_histogram = round(macd_line[-1] - signal_line[-1], 2)
 
     # ========================
     # 유틸리티

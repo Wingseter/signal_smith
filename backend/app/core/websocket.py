@@ -5,11 +5,21 @@ implementations. All existing WebSocket API contracts are preserved.
 """
 
 import logging
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
 from fastapi import WebSocket
 
+from app.core.security import TokenData, decode_token
+
 logger = logging.getLogger(__name__)
+
+
+async def authenticate_websocket(websocket: WebSocket) -> Optional[TokenData]:
+    """Authenticate a WebSocket connection via query param ``?token=<jwt>``."""
+    token = websocket.query_params.get("token")
+    if not token:
+        return None
+    return decode_token(token, expected_type="access")
 
 
 class BaseConnectionManager:

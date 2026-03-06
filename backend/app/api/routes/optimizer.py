@@ -160,7 +160,7 @@ async def get_optimization_methods() -> Dict[str, Any]:
 
 
 @router.post("/optimize", response_model=OptimizationResponse)
-async def optimize_portfolio(
+def optimize_portfolio(
     request: OptimizeRequest,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -200,7 +200,7 @@ async def optimize_portfolio(
         current_price = float(latest_price.close) if latest_price else 50000
 
         # Calculate expected return and volatility from historical data
-        expected_return, volatility = await _calculate_asset_stats(symbol, db)
+        expected_return, volatility = _calculate_asset_stats(symbol, db)
 
         assets.append(
             AssetInfo(
@@ -218,7 +218,7 @@ async def optimize_portfolio(
         raise HTTPException(status_code=404, detail="No valid assets found")
 
     # Fetch returns data
-    returns_data = await _fetch_returns_data([a.symbol for a in assets], db)
+    returns_data = _fetch_returns_data([a.symbol for a in assets], db)
 
     # Create optimizer
     optimizer = PortfolioOptimizer(
@@ -257,7 +257,7 @@ async def optimize_portfolio(
 
 
 @router.post("/position-size", response_model=PositionSizeResponse)
-async def calculate_position_size(
+def calculate_position_size(
     request: PositionSizeRequest,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -301,7 +301,7 @@ async def calculate_position_size(
 
 
 @router.get("/diversification")
-async def analyze_diversification(
+def analyze_diversification(
     portfolio_id: Optional[int] = None,
     db: Session = Depends(get_sync_db_dep),
     current_user: User = Depends(get_current_user),
@@ -383,7 +383,7 @@ async def analyze_diversification(
     stocks = db.query(Stock).limit(50).all()
     for stock in stocks:
         if stock.symbol not in [h["symbol"] for h in current_holdings]:
-            exp_ret, vol = await _calculate_asset_stats(stock.symbol, db)
+            exp_ret, vol = _calculate_asset_stats(stock.symbol, db)
             latest_price = (
                 db.query(StockPrice)
                 .filter(StockPrice.symbol == stock.symbol)
@@ -412,7 +412,7 @@ async def analyze_diversification(
 
 
 @router.post("/rebalance")
-async def suggest_rebalancing(
+def suggest_rebalancing(
     portfolio_id: Optional[int] = None,
     target_method: str = "max_sharpe",
     db: Session = Depends(get_sync_db_dep),
@@ -473,7 +473,7 @@ async def suggest_rebalancing(
     assets = []
     for symbol in symbols:
         stock = db.query(Stock).filter(Stock.symbol == symbol).first()
-        exp_ret, vol = await _calculate_asset_stats(symbol, db)
+        exp_ret, vol = _calculate_asset_stats(symbol, db)
         assets.append(
             AssetInfo(
                 symbol=symbol,
@@ -485,7 +485,7 @@ async def suggest_rebalancing(
             )
         )
 
-    returns_data = await _fetch_returns_data(symbols, db)
+    returns_data = _fetch_returns_data(symbols, db)
 
     optimizer = PortfolioOptimizer()
     method = OPTIMIZATION_METHODS.get(target_method, OptimizationMethod.MAX_SHARPE)
@@ -526,7 +526,7 @@ async def suggest_rebalancing(
     }
 
 
-async def _calculate_asset_stats(symbol: str, db: Session) -> tuple[float, float]:
+def _calculate_asset_stats(symbol: str, db: Session) -> tuple[float, float]:
     """Calculate expected return and volatility for an asset."""
     # Get price history
     end_date = datetime.now()
@@ -554,7 +554,7 @@ async def _calculate_asset_stats(symbol: str, db: Session) -> tuple[float, float
     return expected_return, volatility
 
 
-async def _fetch_returns_data(symbols: List[str], db: Session) -> pd.DataFrame:
+def _fetch_returns_data(symbols: List[str], db: Session) -> pd.DataFrame:
     """Fetch historical returns data for multiple symbols."""
     end_date = datetime.now()
     start_date = end_date - timedelta(days=365)

@@ -23,6 +23,7 @@ class NewsAnalyzer:
     """Gemini 기반 뉴스 분석기 (CLIProxiAPI OpenAI 호환)"""
 
     ANALYSIS_PROMPT = """당신은 한국 주식시장 전문 애널리스트입니다.
+
 다음 뉴스가 관련 종목의 주가에 미칠 영향을 분석해주세요.
 
 [뉴스 정보]
@@ -60,6 +61,16 @@ class NewsAnalyzer:
     def __init__(self):
         self._client: Optional[AsyncOpenAI] = None
         self._initialized = False
+        self._analysis_callbacks: list = []
+
+    def add_analysis_callback(self, callback):
+        """분석 완료 시 호출될 콜백 등록"""
+        self._analysis_callbacks.append(callback)
+
+    def remove_analysis_callback(self, callback):
+        """콜백 제거"""
+        if callback in self._analysis_callbacks:
+            self._analysis_callbacks.remove(callback)
 
     def _initialize(self):
         """OpenAI 호환 클라이언트 초기화 (CLIProxiAPI 경유)"""
@@ -190,6 +201,14 @@ class NewsAnalyzer:
 
         return result
 
+    async def _notify_analysis_callbacks(self, result: NewsAnalysisResult):
+        """분석 완료 콜백 호출"""
+        for callback in self._analysis_callbacks:
+            try:
+                await callback(result)
+            except Exception as e:
+                logger.error(f"분석 콜백 오류: {e}")
+
     async def analyze(self, article: NewsArticle) -> NewsAnalysisResult:
         """뉴스 분석 수행"""
         self._initialize()
@@ -198,7 +217,7 @@ class NewsAnalyzer:
         quick_score = self._quick_sentiment_check(article.title)
         if quick_score is not None:
             logger.debug(f"빠른 분석 적용: {article.title} -> {quick_score}점")
-            return NewsAnalysisResult(
+            result = NewsAnalysisResult(
                 article=article,
                 score=quick_score,
                 sentiment=self._score_to_sentiment(quick_score),
@@ -207,6 +226,8 @@ class NewsAnalyzer:
                 trading_signal="BUY" if quick_score >= 7 else ("SELL" if quick_score <= 3 else "HOLD"),
                 analyzer="gemini_quick"
             )
+            await self._notify_analysis_callbacks(result)
+            return result
 
         # Gemini 분석
         try:
@@ -245,7 +266,7 @@ class NewsAnalyzer:
                         article.symbol = mapped_code
                         logger.info(f"종목코드 매핑: {article.company_name} -> {mapped_code}")
 
-            return NewsAnalysisResult(
+            result = NewsAnalysisResult(
                 article=article,
                 score=parsed["score"],
                 sentiment=NewsSentiment(parsed["sentiment"]),
@@ -254,11 +275,13 @@ class NewsAnalyzer:
                 trading_signal=parsed["signal"],
                 analyzer="gemini"
             )
+            await self._notify_analysis_callbacks(result)
+            return result
 
         except Exception as e:
             logger.error(f"Gemini 분석 오류: {e}")
             # 실패 시 중립 반환
-            return NewsAnalysisResult(
+            result = NewsAnalysisResult(
                 article=article,
                 score=5,
                 sentiment=NewsSentiment.NEUTRAL,
@@ -267,6 +290,8 @@ class NewsAnalyzer:
                 trading_signal="HOLD",
                 analyzer="gemini_error"
             )
+            await self._notify_analysis_callbacks(result)
+            return result
 
     async def analyze_batch(self, articles: list[NewsArticle]) -> list[NewsAnalysisResult]:
         """여러 뉴스 일괄 분석"""
