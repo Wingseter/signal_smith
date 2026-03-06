@@ -9,6 +9,7 @@ DART API 클라이언트
 API 문서: https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS001
 """
 
+import asyncio
 import logging
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
@@ -193,6 +194,17 @@ class DartClient:
                     except json.JSONDecodeError:
                         pass
 
+                # XML 에러 응답 확인 (시스템 점검 등)
+                if response.content[:5] == b'<?xml':
+                    try:
+                        error_root = ET.fromstring(response.content)
+                        status = error_root.findtext('status', '')
+                        message = error_root.findtext('message', '')
+                        logger.error(f"DART API XML 에러 (status={status}): {message}")
+                    except ET.ParseError:
+                        logger.error(f"DART 응답 XML 파싱 실패: {response.content[:200]}")
+                    return False
+
                 # ZIP 파일인지 확인 (ZIP 매직 넘버: PK)
                 if response.content[:2] != b'PK':
                     logger.error(f"DART 응답이 ZIP 파일이 아닙니다. 처음 100바이트: {response.content[:100]}")
@@ -216,8 +228,8 @@ class DartClient:
 
                 logger.info(f"DART 고유번호 로드 완료: {len(self._corp_code_cache)}개 상장기업")
 
-                # Redis 캐시 저장 (24시간)
-                await redis.set(cache_key, json.dumps(self._corp_code_cache), ex=86400)
+                # Redis 캐시 저장 (7일 — 상장기업 목록은 자주 변하지 않음)
+                await redis.set(cache_key, json.dumps(self._corp_code_cache), ex=604800)
 
                 return True
 
@@ -234,9 +246,15 @@ class DartClient:
         if stock_code in self._corp_code_cache:
             return self._corp_code_cache[stock_code]
 
-        # 캐시가 비어있으면 전체 목록 로드
+        # 캐시가 비어있으면 전체 목록 로드 (최대 2회 시도)
         if not self._corp_code_cache:
-            await self._load_corp_codes()
+            for attempt in range(2):
+                success = await self._load_corp_codes()
+                if success:
+                    break
+                if attempt == 0:
+                    logger.info("DART 기업코드 로드 재시도 (3초 후)...")
+                    await asyncio.sleep(3)
 
         return self._corp_code_cache.get(stock_code)
 

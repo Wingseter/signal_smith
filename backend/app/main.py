@@ -33,6 +33,13 @@ async def lifespan(app: FastAPI):
     from app.services.council.orchestrator import council_orchestrator
     await council_orchestrator.restore_pending_signals()
 
+    # DART 기업코드 캐시 프리로드 (점검 시간 대비)
+    try:
+        from app.services.dart_client import dart_client
+        await dart_client._load_corp_codes()
+    except Exception as e:
+        logger.warning(f"DART 기업코드 프리로드 실패 (점검 중일 수 있음): {e}")
+
     yield
 
     # Shutdown: release connections
