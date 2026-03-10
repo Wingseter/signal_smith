@@ -166,8 +166,8 @@ export default function AICouncil() {
   }, [status]);
 
   const defaultConfig: CouncilConfig = {
-    council_threshold: status?.council_threshold || 7,
-    sell_threshold: 3,
+    council_threshold: status?.council_threshold ?? 7,
+    sell_threshold: status?.sell_threshold ?? 3,
     auto_execute: status?.auto_execute ?? true,
     max_position_per_stock: 500000,
     poll_interval: 60,

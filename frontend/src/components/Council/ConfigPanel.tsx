@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { CouncilConfig } from './types';
 
 export function ConfigPanel({
@@ -11,10 +11,6 @@ export function ConfigPanel({
   isLoading: boolean;
 }) {
   const [localConfig, setLocalConfig] = useState(config);
-
-  useEffect(() => {
-    setLocalConfig(config);
-  }, [config]);
 
   return (
     <div className="bg-white rounded-xl border-2 shadow-lg overflow-hidden">

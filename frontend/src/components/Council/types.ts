@@ -67,6 +67,7 @@ export interface CouncilStatus {
   running: boolean;
   auto_execute: boolean;
   council_threshold: number;
+  sell_threshold: number;
   pending_signals: number;
   total_meetings: number;
   daily_trades: number;

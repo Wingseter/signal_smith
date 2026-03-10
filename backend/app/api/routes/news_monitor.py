@@ -7,7 +7,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from dataclasses import dataclass, field, asdict
 
@@ -100,7 +100,7 @@ class NewsMonitorHistory:
             company_name=article.company_name,
             category=article.category.value if hasattr(article.category, 'value') else str(article.category),
             keywords=article.keywords,
-            crawled_at=datetime.now().isoformat(),
+            crawled_at=datetime.now(timezone.utc).isoformat(),
             is_trigger=is_trigger,
         )
 
@@ -109,7 +109,7 @@ class NewsMonitorHistory:
             self.crawled_news = self.crawled_news[:self.max_items]
 
         self.stats["total_crawled"] += 1
-        self.stats["last_crawl_at"] = datetime.now().isoformat()
+        self.stats["last_crawl_at"] = datetime.now(timezone.utc).isoformat()
         if is_trigger:
             self.stats["total_triggers"] += 1
 
@@ -129,7 +129,7 @@ class NewsMonitorHistory:
             confidence=result.confidence,
             analysis_reason=result.analysis_reason,
             analyzer=result.analyzer,
-            analyzed_at=datetime.now().isoformat(),
+            analyzed_at=datetime.now(timezone.utc).isoformat(),
         )
 
         self.analysis_history.insert(0, item)
@@ -137,7 +137,7 @@ class NewsMonitorHistory:
             self.analysis_history = self.analysis_history[:self.max_items]
 
         self.stats["total_analyzed"] += 1
-        self.stats["last_analysis_at"] = datetime.now().isoformat()
+        self.stats["last_analysis_at"] = datetime.now(timezone.utc).isoformat()
 
         # 비동기 콜백 호출
         asyncio.create_task(self._notify_callbacks("analyzed", item.to_dict()))
