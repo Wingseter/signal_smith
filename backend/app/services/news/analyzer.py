@@ -1,7 +1,7 @@
 """
-뉴스 분석 서비스 (Gemini via CLIProxiAPI)
+뉴스 분석 서비스 (Sonnet via CLIProxiAPI)
 
-실시간 뉴스 분석을 위한 빠른 Gemini 기반 분석기
+실시간 뉴스 분석을 위한 Claude Sonnet 기반 분석기
 """
 
 import asyncio
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class NewsAnalyzer:
-    """Gemini 기반 뉴스 분석기 (CLIProxiAPI OpenAI 호환)"""
+    """Sonnet 기반 뉴스 분석기 (CLIProxiAPI OpenAI 호환)"""
 
     ANALYSIS_PROMPT = """당신은 한국 주식시장 전문 애널리스트입니다.
 
@@ -85,10 +85,9 @@ class NewsAnalyzer:
             api_key=settings.openai_api_key,
             base_url=settings.openai_base_url,
         )
-        self._model = settings.gemini_council_model  # primary: gemini-3.1-pro-preview
-        self._fallback_model = settings.gemini_fallback_model  # fallback: gemini-3.1-pro-high
+        self._model = settings.news_analyzer_model  # Sonnet model
         self._initialized = True
-        logger.info(f"Gemini 분석기 초기화 완료 (모델: {self._model}, fallback: {self._fallback_model})")
+        logger.info(f"Sonnet 뉴스 분석기 초기화 완료 (모델: {self._model})")
 
     def _score_to_sentiment(self, score: int) -> NewsSentiment:
         """점수를 감성으로 변환"""
@@ -117,7 +116,7 @@ class NewsAnalyzer:
         return None  # LLM 분석 필요
 
     def _parse_response(self, response_text: str) -> dict:
-        """Gemini 응답 파싱"""
+        """Sonnet 응답 파싱"""
         result = {
             "company_name": None,
             "symbol": None,
@@ -227,12 +226,12 @@ class NewsAnalyzer:
                 confidence=0.7,  # 키워드 기반이므로 신뢰도 낮음
                 analysis_reason="키워드 기반 빠른 분석",
                 trading_signal="BUY" if quick_score >= 7 else ("SELL" if quick_score <= 3 else "HOLD"),
-                analyzer="gemini_quick"
+                analyzer="sonnet_quick"
             )
             await self._notify_analysis_callbacks(result)
             return result
 
-        # Gemini 분석
+        # Sonnet 분석
         try:
             company_info = article.company_name or article.symbol or "미상"
             content = article.content or article.summary or "(본문 없음)"
@@ -244,26 +243,13 @@ class NewsAnalyzer:
                 content=content[:500]  # 토큰 절약
             )
 
-            try:
-                response = await self._client.chat.completions.create(
-                    model=self._model,
-                    max_tokens=4096,
-                    temperature=0.3,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                await asyncio.sleep(2)  # rate limit throttle
-            except Exception as api_err:
-                if "429" in str(api_err) or "rate" in str(api_err).lower():
-                    logger.warning(f"Rate limit hit, falling back to {self._fallback_model}")
-                    response = await self._client.chat.completions.create(
-                        model=self._fallback_model,
-                        max_tokens=4096,
-                        temperature=0.3,
-                        messages=[{"role": "user", "content": prompt}],
-                    )
-                    await asyncio.sleep(2)  # rate limit throttle
-                else:
-                    raise
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                max_tokens=4096,
+                temperature=0.3,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            await asyncio.sleep(2)  # rate limit throttle
 
             response_text = response.choices[0].message.content
             parsed = self._parse_response(response_text)
@@ -272,7 +258,7 @@ class NewsAnalyzer:
             if parsed["company_name"] and not article.company_name:
                 article.company_name = parsed["company_name"]
 
-            # 종목코드 설정 (우선순위: Gemini 추출 > 매핑 테이블 조회)
+            # 종목코드 설정 (우선순위: Sonnet 추출 > 매핑 테이블 조회)
             if not article.symbol:
                 if parsed["symbol"]:
                     article.symbol = parsed["symbol"]
@@ -290,13 +276,13 @@ class NewsAnalyzer:
                 confidence=parsed["confidence"],  # 동적 신뢰도 사용
                 analysis_reason=parsed["reason"],
                 trading_signal=parsed["signal"],
-                analyzer="gemini"
+                analyzer="sonnet"
             )
             await self._notify_analysis_callbacks(result)
             return result
 
         except Exception as e:
-            logger.error(f"Gemini 분석 오류: {e}")
+            logger.error(f"Sonnet 분석 오류: {e}")
             # 실패 시 중립 반환
             result = NewsAnalysisResult(
                 article=article,
@@ -305,7 +291,7 @@ class NewsAnalyzer:
                 confidence=0.0,
                 analysis_reason=f"분석 실패: {str(e)}",
                 trading_signal="HOLD",
-                analyzer="gemini_error"
+                analyzer="sonnet_error"
             )
             await self._notify_analysis_callbacks(result)
             return result

@@ -59,8 +59,8 @@ class AccountClient:
                 d1_estimated_deposit = parse_int(result.get("d1_entra"))
                 d2_estimated_deposit = parse_int(result.get("d2_entra"))
                 available_amount = parse_int(result.get("ord_alow_amt"))
-                # 일반 예수금(entr)과 D+1/D+2 추정예수금 중 가장 큰 값을 예수금 기준으로 사용
-                total_deposit = max(entr_amount, d1_estimated_deposit, d2_estimated_deposit)
+                # D+2 추정예수금 = 결제 완료 후 실제 예수금 (가장 보수적이고 정확한 값)
+                total_deposit = d2_estimated_deposit
                 logger.info(
                     "kt00001 - 예수금(entr): %s, D+1추정(d1_entra): %s, D+2추정(d2_entra): %s, 주문가능: %s, 적용예수금: %s",
                     entr_amount,

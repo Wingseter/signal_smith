@@ -1,8 +1,8 @@
 // AI 분석가 정보 - 각 AI의 역할과 분석 방법론 설명
 export const AI_ANALYSTS = {
   gemini_judge: {
-    name: 'Gemini',
-    role: '뉴스/심리 분석가',
+    name: 'Sonnet',
+    role: '뉴스 트리거',
     icon: '🔔',
     color: 'blue',
     bgColor: 'bg-blue-50',
@@ -10,15 +10,15 @@ export const AI_ANALYSTS = {
     textColor: 'text-blue-700',
     gradientFrom: 'from-blue-500',
     gradientTo: 'to-blue-600',
-    description: '실시간 뉴스와 시장 심리를 분석하여 투자 기회를 발굴합니다.',
+    description: '실시간 뉴스를 분석하여 투자 회의를 소집합니다.',
     methodology: [
       '뉴스 헤드라인 감성 분석',
-      '소셜 미디어 트렌드 모니터링',
-      '시장 심리 지표 (VIX, Put/Call Ratio) 분석',
+      '종목 연관도 평가',
+      '시장 영향도 점수 산정',
       '이벤트 드리븐 투자 기회 포착'
     ],
-    strengths: ['빠른 뉴스 대응', '시장 심리 파악', '이벤트 분석'],
-    avatar: '🤖'
+    strengths: ['빠른 뉴스 대응', '감성 분석', '이벤트 분석'],
+    avatar: '📰'
   },
   gpt_quant: {
     name: 'GPT',
@@ -59,6 +59,26 @@ export const AI_ANALYSTS = {
     ],
     strengths: ['기업 내재가치 평가', '장기 투자 관점', '리스크 분석'],
     avatar: '📚'
+  },
+  gpt_devils_advocate: {
+    name: 'GPT 반대론자',
+    role: '투자 반대론자',
+    icon: '😈',
+    color: 'red',
+    bgColor: 'bg-red-50',
+    borderColor: 'border-red-200',
+    textColor: 'text-red-700',
+    gradientFrom: 'from-red-500',
+    gradientTo: 'to-red-600',
+    description: '모든 투자 결정에 반대하며 리스크를 극대화하여 제시합니다.',
+    methodology: [
+      '기술적 지표 기반 하락 리스크 분석',
+      '재무제표 기반 펀더멘털 약점 공격',
+      '최악의 시나리오 시뮬레이션',
+      '다른 분석가 논리 허점 반박'
+    ],
+    strengths: ['리스크 발굴', '논리적 반박', '냉정한 판단'],
+    avatar: '😈'
   },
   moderator: {
     name: '조정자',

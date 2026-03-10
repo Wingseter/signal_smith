@@ -2,11 +2,11 @@
 AI 투자 회의 시스템
 
 멀티 AI가 협력하여 투자 결정을 내리는 회의 시스템
-- Gemini: 뉴스 판단 및 회의 소집
-- GPT: 퀀트/기술적 분석
-- Claude: 펀더멘털 분석
+- Sonnet: 뉴스 분석 및 트리거
+- GPT: 퀀트/기술적 분석 + 반대론자
+- Claude Opus: 펀더멘털 분석 + 최종 판결
 
-v2: 자동 매매, SELL 시그널, 거래 시간 체크 추가
+v3: 반대론자 추가, Gemini→Sonnet 전환
 """
 
 from .models import (
@@ -17,6 +17,7 @@ from .models import (
 )
 from .quant_analyst import QuantAnalyst, quant_analyst
 from .fundamental_analyst import FundamentalAnalyst, fundamental_analyst
+from .devils_advocate import DevilsAdvocate, devils_advocate
 from .orchestrator import CouncilOrchestrator, council_orchestrator
 from .trading_hours import TradingHoursChecker, trading_hours, MarketSession
 from .cost_manager import CostManager, cost_manager, AnalysisDepth
@@ -31,6 +32,8 @@ __all__ = [
     "quant_analyst",
     "FundamentalAnalyst",
     "fundamental_analyst",
+    "DevilsAdvocate",
+    "devils_advocate",
     "CouncilOrchestrator",
     "council_orchestrator",
     "TradingHoursChecker",

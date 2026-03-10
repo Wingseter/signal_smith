@@ -20,9 +20,10 @@ class SignalStatus(str, Enum):
 
 class AnalystRole(str, Enum):
     """분석가 역할"""
-    GEMINI_JUDGE = "gemini_judge"       # Gemini: 뉴스 판단
+    GEMINI_JUDGE = "gemini_judge"       # 뉴스 트리거 (레거시 명칭 유지)
     GPT_QUANT = "gpt_quant"             # GPT: 퀀트 분석
     CLAUDE_FUNDAMENTAL = "claude_fundamental"  # Claude: 펀더멘털 분석
+    GPT_DEVILS_ADVOCATE = "gpt_devils_advocate"  # GPT: 반대론자
     MODERATOR = "moderator"             # 중재자 (합의 도출)
 
 
@@ -149,6 +150,7 @@ class CouncilMeeting:
                 AnalystRole.GEMINI_JUDGE: "🔔",
                 AnalystRole.GPT_QUANT: "📊",
                 AnalystRole.CLAUDE_FUNDAMENTAL: "📈",
+                AnalystRole.GPT_DEVILS_ADVOCATE: "😈",
                 AnalystRole.MODERATOR: "⚖️",
             }.get(msg.role, "💬")
 

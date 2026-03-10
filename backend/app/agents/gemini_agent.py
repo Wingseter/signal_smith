@@ -1,10 +1,12 @@
 """
-Gemini AI Agent for Real-time News Analysis (via CLIProxiAPI)
+News/Sentiment AI Agent (Sonnet via CLIProxiAPI)
 
 Responsibilities:
 - Monitor news headlines and breaking news
 - Analyze market sentiment from news
 - Identify news-driven trading opportunities
+
+레거시: 클래스명 GeminiNewsAgent 유지 (참조 호환)
 """
 
 from typing import Optional, List
@@ -16,11 +18,11 @@ from app.agents.base_agent import BaseLLMAgent
 
 
 class GeminiNewsAgent(BaseLLMAgent):
-    """Gemini-based agent for council analysis (via CLIProxiAPI)."""
+    """Sonnet-based agent for news/sentiment analysis (via CLIProxiAPI)."""
 
     def __init__(self):
         super().__init__(
-            model_name=settings.gemini_council_model,
+            model_name=settings.news_analyzer_model,  # Sonnet
             api_key=settings.openai_api_key,  # CLIProxiAPI 공유 키
             base_url=settings.openai_base_url,
         )

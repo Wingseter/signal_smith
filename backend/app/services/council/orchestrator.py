@@ -21,6 +21,7 @@ from .models import (
 )
 from .quant_analyst import quant_analyst
 from .fundamental_analyst import fundamental_analyst
+from .devils_advocate import devils_advocate
 from .technical_indicators import technical_calculator, TechnicalAnalysisResult
 from .llm_utils import call_analyst_with_timeout
 from app.services.dart_client import dart_client, FinancialData
@@ -216,7 +217,7 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
 
         opening_msg = CouncilMessage(
             role=AnalystRole.GEMINI_JUDGE,
-            speaker="Gemini 뉴스 판단",
+            speaker="뉴스 트리거",
             content=opening_content,
             data=opening_data,
         )
@@ -272,50 +273,27 @@ AI 회의를 통해 투자 여부를 최종 결정합니다.
         fundamental_percent = fundamental_msg.data.get("suggested_percent", 0) if fundamental_msg.data else 0
         fundamental_score = fundamental_msg.data.get("score", 5) if fundamental_msg.data else 5
 
-        # 3. 라운드 2: 상호 검토 및 조정
+        # 3. 라운드 2: 반대론자 도전
         meeting.current_round = 2
 
-        quant_response, qr_ok = await call_analyst_with_timeout(
-            quant_analyst.respond_to(
+        advocate_msg, adv_ok = await call_analyst_with_timeout(
+            devils_advocate.challenge(
                 symbol=symbol,
                 company_name=company_name,
                 news_title=news_title,
                 previous_messages=meeting.messages,
-                other_analysis=fundamental_msg.content,
                 technical_data=technical_data,
-                quant_trigger_data=quant_triggers if trigger_source == "quant" else None,
+                financial_data=financial_data,
             ),
-            fallback_role=AnalystRole.GPT_QUANT,
-            fallback_speaker="퀀트 응답",
-            fallback_content="[시스템 경고] 퀀트 분석가 상호 검토 응답 지연으로 기존 의견을 유지합니다.",
-            fallback_data={"suggested_percent": quant_percent, "score": quant_score},
+            fallback_role=AnalystRole.GPT_DEVILS_ADVOCATE,
+            fallback_speaker="반대론자",
+            fallback_content="[시스템 경고] 반대론자 API 응답 지연으로 리스크 평가를 건너뜁니다.",
+            fallback_data={"risk_score": 5, "recommended_action": "HOLD"},
         )
-        meeting.add_message(quant_response)
-        if qr_ok:
-            await self._notify_meeting_update(meeting)
-            if quant_response.data and "suggested_percent" in quant_response.data:
-                quant_percent = quant_response.data["suggested_percent"]
+        meeting.add_message(advocate_msg)
+        await self._notify_meeting_update(meeting)
 
-        fundamental_response, fr_ok = await call_analyst_with_timeout(
-            fundamental_analyst.respond_to(
-                symbol=symbol,
-                company_name=company_name,
-                news_title=news_title,
-                previous_messages=meeting.messages,
-                other_analysis=quant_response.content,
-            ),
-            fallback_role=AnalystRole.CLAUDE_FUNDAMENTAL,
-            fallback_speaker="기본적 응답",
-            fallback_content="[시스템 경고] 기본적 분석가 상호 검토 응답 지연으로 기존 의견을 유지합니다.",
-            fallback_data={"suggested_percent": fundamental_percent, "score": fundamental_score},
-        )
-        meeting.add_message(fundamental_response)
-        if fr_ok:
-            await self._notify_meeting_update(meeting)
-            if fundamental_response.data and "suggested_percent" in fundamental_response.data:
-                fundamental_percent = fundamental_response.data["suggested_percent"]
-
-        # 4. 라운드 3: 합의 도출
+        # 4. 라운드 3: 최종 판결 (Opus)
         meeting.current_round = 3
 
         consensus_msg, cons_ok = await call_analyst_with_timeout(

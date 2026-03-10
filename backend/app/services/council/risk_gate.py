@@ -37,7 +37,7 @@ async def check_buy_gates(
     try:
         balance = await kiwoom_client.get_balance()
         holdings = await kiwoom_client.get_holdings()
-        total_assets = balance.available_amount + balance.total_evaluation
+        total_assets = balance.total_deposit + balance.total_evaluation
 
         if total_assets <= 0:
             total_assets = suggested_amount  # fallback
