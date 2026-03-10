@@ -37,21 +37,32 @@ class NewsAnalyzer:
 1. 관련 종목 추출 - 뉴스에서 언급된 상장 기업을 찾아주세요
    - 회사명: 정확한 회사명 (예: 삼성전자, LG에너지솔루션)
    - 종목코드: 6자리 숫자 (모르면 "미상")
-2. 주가 영향 점수 (1-10점, 10점이 가장 긍정적)
-3. 감성 분류 (very_positive/positive/neutral/negative/very_negative)
-4. 매매 신호 (BUY/SELL/HOLD) - 반드시 BUY, SELL, HOLD 중 하나만 선택
+2. 세력/작전 뉴스 여부 판별 (suspicious: true/false)
+   - 다음 패턴이 보이면 의심하세요:
+     · 출처 불명 또는 비주류 매체의 급등 전망 기사
+     · 구체적 근거 없이 "대박", "급등", "10배" 등 과장 표현
+     · 소형주·테마주에 대한 갑작스런 긍정 기사 폭발
+     · 특정 종목 매수를 유도하는 듯한 논조 (리딩방, 찌라시 스타일)
+     · 실체 없는 MOU, 양해각서, 사업 진출 "예정" 뉴스
+     · 최근 주가 급등 후 뒤따르는 장밋빛 기사 (세력 물량 떠넘기기)
+   - 의심 시: 점수를 5(중립)로 고정하고 신호를 HOLD로 설정
+3. 주가 영향 점수 (1-10점, 10점이 가장 긍정적)
+4. 감성 분류 (very_positive/positive/neutral/negative/very_negative)
+5. 매매 신호 (BUY/SELL/HOLD) - 반드시 BUY, SELL, HOLD 중 하나만 선택
    - BUY: 점수 8점 이상, 매우 긍정적 (대형 계약, 실적 서프라이즈, 신사업 진출)
    - SELL: 점수 3점 이하, 매우 부정적 (실적 악화, 소송, 규제, 대규모 손실)
    - HOLD: 점수 4-7점, 영향 불분명하거나 중립적인 경우
-5. 신뢰도 (0.5-0.95) - 분석의 확신 정도
+6. 신뢰도 (0.5-0.95) - 분석의 확신 정도
    - 0.85-0.95: 매우 명확한 영향 (공시, 대규모 M&A, 실적 발표)
    - 0.7-0.85: 명확한 영향 (계약 체결, 신제품 출시)
    - 0.5-0.7: 불확실한 영향 (루머, 전망 기사, 시장 동향)
-6. 분석 근거 (1-2문장)
+   - 세력 의심 시: 무조건 0.5 이하
+7. 분석 근거 (1-2문장)
 
 [응답 형식] - 반드시 이 형식을 따라주세요
 회사명: [추출된 회사명 또는 "미상"]
 종목코드: [6자리 코드 또는 "미상"]
+세력의심: [true 또는 false]
 점수: [숫자]
 감성: [분류]
 신호: [매매신호]
@@ -120,6 +131,7 @@ class NewsAnalyzer:
         result = {
             "company_name": None,
             "symbol": None,
+            "suspicious": False,
             "score": 5,
             "sentiment": "neutral",
             "signal": "HOLD",
@@ -144,6 +156,10 @@ class NewsAnalyzer:
                     code_match = re.search(r"\d{6}", code)
                     if code_match:
                         result["symbol"] = code_match.group()
+
+                elif line.startswith("세력의심:"):
+                    suspicious_text = line.replace("세력의심:", "").strip().lower()
+                    result["suspicious"] = suspicious_text in ("true", "yes", "예", "의심")
 
                 elif line.startswith("점수:"):
                     score_text = line.replace("점수:", "").strip()
@@ -186,6 +202,15 @@ class NewsAnalyzer:
 
         except Exception as e:
             logger.error(f"응답 파싱 오류: {e}")
+
+        # 세력 의심 뉴스 강제 보정
+        if result["suspicious"]:
+            result["score"] = 5
+            result["signal"] = "HOLD"
+            result["confidence"] = min(result["confidence"], 0.5)
+            result["sentiment"] = "neutral"
+            result["reason"] = f"[세력 의심] {result['reason']}"
+            logger.warning(f"세력 의심 뉴스 감지 — 강제 HOLD 처리: {result.get('company_name', '미상')}")
 
         # 점수와 신호 일관성 보정
         score = result["score"]
