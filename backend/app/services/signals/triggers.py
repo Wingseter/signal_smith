@@ -115,9 +115,9 @@ class TriggerEvaluator:
 
     def determine_action(self, score: int, triggers: List[TriggerResult]) -> SignalAction:
         """종합 점수로 행동 결정"""
-        if score >= 80:
+        if score >= 70:
             return SignalAction.STRONG_BUY
-        elif score >= 65:
+        elif score >= 58:
             return SignalAction.BUY
         elif score >= 40:
             return SignalAction.HOLD

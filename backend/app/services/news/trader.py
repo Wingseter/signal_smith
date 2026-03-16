@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class TradingConfig:
     """자동매매 설정"""
     enabled: bool = False                    # 자동매매 활성화
-    council_threshold: int = 6               # AI 회의 소집 기준 점수 (이상) - 6점 이상이면 회의 소집
+    council_threshold: int = 7               # AI 회의 소집 기준 점수 (이상) - 7점 이상이면 회의 소집
     sell_threshold: int = 4                  # 매도 기준 점수 (이하) - 4점 이하면 매도 신호
     max_position_per_stock: int = 5000000    # 종목당 최대 투자금 (상한 캡)
     max_daily_trades: int = 10               # 일일 최대 거래 횟수
