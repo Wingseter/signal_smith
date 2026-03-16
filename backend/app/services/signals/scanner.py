@@ -319,8 +319,8 @@ class SignalScanner:
         # 인메모리 저장 (기존 방식 유지)
         self._results = [r for r in self._results if r.symbol != result.symbol]
         self._results.append(result)
-        if len(self._results) > 500:
-            self._results = self._results[-500:]
+        if len(self._results) > 5000:
+            self._results = self._results[-5000:]
 
         # Redis 저장
         try:

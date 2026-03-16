@@ -30,17 +30,17 @@ FALLBACK_SYMBOLS = [
     bind=True,
     max_retries=2,
     default_retry_delay=120,
-    time_limit=600,
-    soft_time_limit=540,
+    time_limit=1800,
+    soft_time_limit=1500,
 )
 def scan_signals(self):
-    """Quant signal scan (top 500 stocks by market cap)."""
+    """Quant signal scan (all stocks in universe)."""
     if not is_market_hours():
         logger.info("Market is closed. Skipping signal scan.")
         return {"status": "skipped", "reason": "market_closed"}
 
     try:
-        symbols = _load_scan_universe(limit=500)
+        symbols = _load_scan_universe()
         symbols = _merge_holdings_into_scan_universe(symbols)
         if len(symbols) < 200:
             logger.warning(
@@ -133,14 +133,14 @@ async def _refresh_account_summary_async() -> dict:
         return {"status": "error", "reason": str(e)}
 
 
-def _load_scan_universe(limit: int = 500) -> List[str]:
+def _load_scan_universe() -> List[str]:
     """Load scan target symbols (Redis cache → DB fallback → hardcoded)."""
     try:
         cached = run_async(_get_cached_universe())
         if cached:
             symbols = json.loads(cached)
             logger.info(f"Loaded {len(symbols)} symbols from Redis cache")
-            return symbols[:limit]
+            return symbols
     except Exception as e:
         logger.warning(f"Redis cache miss for stock universe: {e}")
 
@@ -157,7 +157,6 @@ def _load_scan_universe(limit: int = 500) -> List[str]:
                         Stock.market,
                         desc(Stock.market_cap),
                     )
-                    .limit(limit)
                 )
                 .all()
             )
@@ -208,7 +207,7 @@ async def _get_cached_universe() -> Optional[str]:
     from app.core.redis import get_redis
 
     redis = await get_redis()
-    return await redis.get("stock_universe:top500")
+    return await redis.get("stock_universe:all")
 
 
 async def _refresh_universe_async() -> dict:
@@ -263,18 +262,17 @@ async def _refresh_universe_async() -> dict:
                     Stock.market,
                     desc(Stock.market_cap),
                 )
-                .limit(500)
             )
             .scalars()
             .all()
         )
 
-    top_symbols = list(top_stocks)
+    all_symbols = list(top_stocks)
 
     try:
         redis = await get_redis()
-        await redis.set("stock_universe:top500", json.dumps(top_symbols), ex=86400)
-        logger.info(f"Cached {len(top_symbols)} symbols to Redis")
+        await redis.set("stock_universe:all", json.dumps(all_symbols), ex=86400)
+        logger.info(f"Cached {len(all_symbols)} symbols to Redis")
     except Exception as e:
         logger.warning(f"Redis cache failed: {e}")
 
@@ -282,7 +280,7 @@ async def _refresh_universe_async() -> dict:
         "status": "success",
         "total_fetched": len(all_stocks),
         "upserted": upserted,
-        "universe_size": len(top_symbols),
+        "universe_size": len(all_symbols),
     }
 
 

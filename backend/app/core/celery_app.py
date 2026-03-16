@@ -74,10 +74,10 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "low_priority"},
     },
 
-    # 퀀트 시그널 스캔 - 15분마다 (상위 500종목)
+    # 퀀트 시그널 스캔 - 60분마다 (전체 종목)
     "scan-signals": {
         "task": "app.services.tasks.scan_signals",
-        "schedule": 900.0,  # Every 15 minutes
+        "schedule": 3600.0,  # Every 60 minutes
         "options": {"queue": "default"},
     },
 

@@ -60,7 +60,7 @@ async def get_status():
 
 
 @router.get("/results")
-async def get_results(limit: int = Query(default=50, le=200)):
+async def get_results(limit: int = Query(default=100, le=5000)):
     """최근 스캔 결과"""
     results = signal_scanner.get_recent_results(limit)
     return {
